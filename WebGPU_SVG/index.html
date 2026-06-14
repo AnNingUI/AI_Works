@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+        />
+        <title>Nebula OS: Fixed Morphing</title>
+        <style>
+            :root {
+                --primary: #d0bcff;
+                --surface: rgba(20, 20, 28, 0.75);
+                --blur: blur(30px);
+                --font: system-ui, -apple-system, sans-serif;
+            }
+
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+                user-select: none;
+                -webkit-tap-highlight-color: transparent;
+            }
+
+            body {
+                background-color: #000;
+                color: #fff;
+                font-family: var(--font);
+                height: 100vh;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+            }
+
+            #gpu-canvas {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 0;
+                background: radial-gradient(
+                    circle at 50% 50%,
+                    #1a1033 0%,
+                    #000 80%
+                );
+            }
+
+            /* Status UI */
+            .status-pill {
+                z-index: 10;
+                margin-top: 32px;
+                background: #111;
+                border: 1px solid #333;
+                padding: 10px 24px;
+                border-radius: 100px;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 1);
+                animation: fadeIn 1s ease-out;
+            }
+            .dot {
+                width: 8px;
+                height: 8px;
+                background: #0f0;
+                border-radius: 50%;
+                box-shadow: 0 0 8px #0f0;
+            }
+            .label {
+                font-size: 0.8rem;
+                font-weight: 700;
+                color: #888;
+                letter-spacing: 1px;
+            }
+            .val {
+                font-family: monospace;
+                color: var(--primary);
+                font-size: 1rem;
+            }
+
+            /* Dock UI */
+            .dock {
+                z-index: 10;
+                position: fixed;
+                bottom: 40px;
+                background: var(--surface);
+                backdrop-filter: var(--blur);
+                -webkit-backdrop-filter: var(--blur);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                padding: 12px;
+                border-radius: 24px;
+                display: flex;
+                gap: 12px;
+                box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+                transform: translateY(120%);
+                animation: slideUp 0.6s 0.2s
+                    cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+            }
+
+            .dock-btn {
+                width: 56px;
+                height: 56px;
+                border-radius: 16px;
+                background: rgba(255, 255, 255, 0.08);
+                border: none;
+                cursor: pointer;
+                color: #fff;
+                display: grid;
+                place-items: center;
+                transition: all 0.2s;
+            }
+            .dock-btn:hover {
+                background: rgba(255, 255, 255, 0.2);
+                transform: scale(1.1);
+            }
+            .dock-btn.active {
+                background: var(--primary);
+                color: #000;
+                box-shadow: 0 0 15px var(--primary);
+            }
+            .dock-btn svg {
+                width: 28px;
+                height: 28px;
+            }
+
+            @keyframes fadeIn {
+                from {
+                    opacity: 0;
+                    transform: translateY(-20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+            @keyframes slideUp {
+                to {
+                    transform: translateY(0);
+                }
+            }
+
+            #error {
+                display: none;
+                position: fixed;
+                inset: 0;
+                background: #000;
+                z-index: 999;
+                justify-content: center;
+                align-items: center;
+                padding: 20px;
+                text-align: center;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="error">
+            <h2 style="color: #ff6b6b">System Incompatible</h2>
+        </div>
+        <canvas id="gpu-canvas"></canvas>
+
+        <div class="status-pill">
+            <div class="dot"></div>
+            <span class="label">PARTICLES</span>
+            <span class="val">200,000</span>
+            <span style="width: 1px; height: 16px; background: #333"></span>
+            <span class="label">MODE</span>
+            <span class="val" id="mode-text">FLUID</span>
+        </div>
+
+        <nav class="dock">
+            <button class="dock-btn active" onclick="setShape('fluid')">
+                <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                >
+                    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                </svg>
+            </button>
+            <button class="dock-btn" onclick="setShape('apple')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path
+                        d="M17.05 19.06c-.73 1.07-1.5 2.1-2.67 2.13-1.18.02-1.56-.7-2.9-.7-1.34 0-1.76.68-2.88.71-1.15.03-2.02-1.15-2.76-2.22-1.51-2.18-2.66-6.14-1.11-8.83.77-1.34 2.15-2.19 3.63-2.21 1.13-.02 2.2.76 2.9.76.7 0 2.02-.78 3.42-.66 1.16.08 2.22.59 2.99 1.54-2.53 1.52-2.1 5.4.82 6.6-.58 1.19-1.25 2.22-1.44 2.88zM14.5 5.76c.56-1.13 1.23-1.95 2.28-2.15.14 1.24-.39 2.47-1.16 3.25-.65.65-1.69 1.14-2.73.99-.11-.94.54-1.84 1.61-2.09z"
+                    />
+                </svg>
+            </button>
+            <button class="dock-btn" onclick="setShape('android')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path
+                        d="M16.6 11.48 L18.44 8.3a.63.63 0 0 0-1.09-.63l-1.89 3.26a8.62 8.62 0 0 0-8.92 0L4.65 7.67a.63.63 0 0 0-1.09.63L5.4 11.48A7.57 7.57 0 0 0 2 17.58h18a7.57 7.57 0 0 0-3.4-6.1zM8 16a1 1 0 1 1 1-1 1 1 0 0 1-1 1zm6 0a1 1 0 1 1 1-1 1 1 0 0 1-1 1z"
+                    />
+                </svg>
+            </button>
+            <button class="dock-btn" onclick="setShape('heart')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path
+                        d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
+                    />
+                </svg>
+            </button>
+        </nav>
+
+        <script type="module">
+            /**
+             * REPAIRED: Fixed WGSL "target" keyword conflict.
+             * Renamed to "targetPos" in Compute Shader.
+             */
+
+            if (!navigator.gpu) {
+                document.getElementById("error").style.display = "flex";
+                throw new Error("WebGPU Not Supported");
+            }
+
+            const CANVAS_W = window.innerWidth;
+            const CANVAS_H = window.innerHeight;
+            const PARTICLE_COUNT = 200000;
+            const PARTICLE_SIZE = 3.0;
+
+            // === 1. SVG PARSING (CPU Side) ===
+            async function getPointsFromSVG(pathString) {
+                const size = Math.min(CANVAS_W, CANVAS_H) * 0.7; // Logo size
+                const offCanvas = document.createElement("canvas");
+                offCanvas.width = CANVAS_W;
+                offCanvas.height = CANVAS_H;
+                const ctx = offCanvas.getContext("2d");
+
+                // Create SVG Blob
+                const svgData = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="white"><path d="${pathString}"/></svg>`;
+                const blob = new Blob([svgData], {
+                    type: "image/svg+xml;charset=utf-8",
+                });
+                const url = URL.createObjectURL(blob);
+
+                const img = new Image();
+                img.src = url;
+                await new Promise((r) => (img.onload = r));
+
+                // Draw centered
+                const aspect = img.width / img.height;
+                const w = size * aspect;
+                const h = size;
+                ctx.drawImage(
+                    img,
+                    (CANVAS_W - w) / 2,
+                    (CANVAS_H - h) / 2,
+                    w,
+                    h,
+                );
+
+                // Scan pixels
+                const imgData = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H).data;
+                const points = [];
+                const step = 5; // Sampling density
+                for (let y = 0; y < CANVAS_H; y += step) {
+                    for (let x = 0; x < CANVAS_W; x += step) {
+                        if (imgData[(y * CANVAS_W + x) * 4 + 3] > 128) {
+                            // If alpha > 128
+                            points.push(x, y);
+                        }
+                    }
+                }
+                URL.revokeObjectURL(url);
+                return points;
+            }
+
+            const SHAPES = {
+                apple: "M17.05 19.06c-.73 1.07-1.5 2.1-2.67 2.13-1.18.02-1.56-.7-2.9-.7-1.34 0-1.76.68-2.88.71-1.15.03-2.02-1.15-2.76-2.22-1.51-2.18-2.66-6.14-1.11-8.83.77-1.34 2.15-2.19 3.63-2.21 1.13-.02 2.2.76 2.9.76.7 0 2.02-.78 3.42-.66 1.16.08 2.22.59 2.99 1.54-2.53 1.52-2.1 5.4.82 6.6-.58 1.19-1.25 2.22-1.44 2.88zM14.5 5.76c.56-1.13 1.23-1.95 2.28-2.15.14 1.24-.39 2.47-1.16 3.25-.65.65-1.69 1.14-2.73.99-.11-.94.54-1.84 1.61-2.09z",
+                android:
+                    "M16.6 11.48 L18.44 8.3a.63.63 0 0 0-1.09-.63l-1.89 3.26a8.62 8.62 0 0 0-8.92 0L4.65 7.67a.63.63 0 0 0-1.09.63L5.4 11.48A7.57 7.57 0 0 0 2 17.58h18a7.57 7.57 0 0 0-3.4-6.1zM8 16a1 1 0 1 1 1-1 1 1 0 0 1-1 1zm6 0a1 1 0 1 1 1-1 1 1 0 0 1-1 1z",
+                heart: "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z",
+            };
+
+            // === 2. WEBGPU ===
+            let device, context;
+            let pBuf, tBuf, uBuf;
+            let pipelineC, pipelineR;
+            let bgC, bgR;
+            let mouse = { x: 0, y: 0 };
+            let params = { morph: 0.0, targetMorph: 0.0 };
+
+            const canvas = document.getElementById("gpu-canvas");
+
+            async function init() {
+                const adapter = await navigator.gpu.requestAdapter();
+                device = await adapter.requestDevice();
+                context = canvas.getContext("webgpu");
+                context.configure({
+                    device,
+                    format: navigator.gpu.getPreferredCanvasFormat(),
+                    alphaMode: "premultiplied",
+                });
+
+                // Buffers
+                const pData = new Float32Array(PARTICLE_COUNT * 4); // x, y, vx, vy
+                const tData = new Float32Array(PARTICLE_COUNT * 2); // tx, ty
+                for (let i = 0; i < PARTICLE_COUNT; i++) {
+                    pData[i * 4] = Math.random() * CANVAS_W;
+                    pData[i * 4 + 1] = Math.random() * CANVAS_H;
+                    tData[i * 2] = CANVAS_W / 2;
+                    tData[i * 2 + 1] = CANVAS_H / 2;
+                }
+
+                pBuf = createBuf(
+                    pData,
+                    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+                );
+                tBuf = createBuf(
+                    tData,
+                    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+                );
+                uBuf = device.createBuffer({
+                    size: 32,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                });
+
+                // Shaders
+                // FIX: Renamed variable 'target' to 'targetPos' to avoid reserved keyword error.
+                const wgslC = `
+    struct P { pos: vec2<f32>, vel: vec2<f32> }
+    struct U { mouse: vec2<f32>, dt: f32, time: f32, res: vec2<f32>, morph: f32, pad: f32 }
+
+    @group(0) @binding(0) var<storage, read_write> p : array<P>;
+    @group(0) @binding(1) var<storage, read> t : array<vec2<f32>>;
+    @group(0) @binding(2) var<uniform> u : U;
+
+    @compute @workgroup_size(64)
+    fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i = id.x;
+        if(i >= arrayLength(&p)) { return; }
+
+        var pt = p[i];
+        let targetPos = t[i]; // Fixed name
+
+        // Fluid Force
+        let toMouse = u.mouse - pt.pos;
+        let dist = length(toMouse);
+        let dir = normalize(toMouse);
+        let vortex = vec2<f32>(-dir.y, dir.x);
+        let f1 = vortex * (1500.0/(dist+50.0)) + dir*(300.0/(dist+10.0));
+
+        // Shape Force
+        let toTarget = targetPos - pt.pos;
+        let f2 = toTarget * 5.0; // Spring
+
+        // Noise
+        let noise = vec2<f32>(sin(f32(i)+u.time*2.0), cos(f32(i)+u.time*3.0)) * 5.0;
+
+        // Blend
+        let force = mix(f1, f2 + noise, u.morph);
+        let fric = mix(0.97, 0.85, u.morph);
+
+        pt.vel += force * u.dt;
+        pt.vel *= fric;
+        pt.pos += pt.vel * u.dt;
+
+        // Wrap only in fluid
+        if(u.morph < 0.1) {
+             if (pt.pos.x < 0.0) { pt.pos.x = u.res.x; }
+             if (pt.pos.x > u.res.x) { pt.pos.x = 0.0; }
+             if (pt.pos.y < 0.0) { pt.pos.y = u.res.y; }
+             if (pt.pos.y > u.res.y) { pt.pos.y = 0.0; }
+        }
+
+        p[i] = pt;
+    }
+    `;
+
+                const wgslR = `
+    struct P { pos: vec2<f32>, vel: vec2<f32> }
+    struct U { mouse: vec2<f32>, dt: f32, time: f32, res: vec2<f32>, morph: f32, pad: f32 }
+    @group(0) @binding(0) var<storage, read> p : array<P>;
+    @group(0) @binding(2) var<uniform> u : U;
+
+    struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) col: vec4<f32> }
+
+    @vertex
+    fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut {
+        let pt = p[ii];
+        var off = vec2<f32>(0.0);
+        let idx = vi % 6u;
+        if(idx==0u){off=vec2<f32>(-0.5,-0.5);} else if(idx==1u){off=vec2<f32>(0.5,-0.5);}
+        else if(idx==2u){off=vec2<f32>(-0.5,0.5);} else if(idx==3u){off=vec2<f32>(-0.5,0.5);}
+        else if(idx==4u){off=vec2<f32>(0.5,-0.5);} else if(idx==5u){off=vec2<f32>(0.5,0.5);}
+
+        let speed = length(pt.vel);
+        let size = 2.5 + speed * 0.01;
+        let wPos = pt.pos + off * size;
+
+        var out: VSOut;
+        out.pos = vec4<f32>( (wPos.x/u.res.x)*2.0-1.0, (1.0-(wPos.y/u.res.y))*2.0-1.0, 0.0, 1.0 );
+
+        let cFluid = mix(vec3<f32>(0.1,0.5,1.0), vec3<f32>(0.5,0.0,1.0), smoothstep(0.0, 50.0, speed));
+        let cShape = mix(vec3<f32>(1.0,0.8,0.2), vec3<f32>(1.0,1.0,1.0), smoothstep(0.0, 100.0, speed));
+        out.col = vec4<f32>(mix(cFluid, cShape, u.morph), 0.7);
+        return out;
+    }
+    @fragment fn fs(@location(0) c: vec4<f32>) -> @location(0) vec4<f32> { return c; }
+    `;
+
+                // Pipeline Create
+                const modC = device.createShaderModule({ code: wgslC });
+                const modR = device.createShaderModule({ code: wgslR });
+
+                // Layouts
+                const bglC = device.createBindGroupLayout({
+                    entries: [
+                        {
+                            binding: 0,
+                            visibility: GPUShaderStage.COMPUTE,
+                            buffer: { type: "storage" },
+                        },
+                        {
+                            binding: 1,
+                            visibility: GPUShaderStage.COMPUTE,
+                            buffer: { type: "read-only-storage" },
+                        },
+                        {
+                            binding: 2,
+                            visibility: GPUShaderStage.COMPUTE,
+                            buffer: { type: "uniform" },
+                        },
+                    ],
+                });
+                bgC = device.createBindGroup({
+                    layout: bglC,
+                    entries: [
+                        { binding: 0, resource: { buffer: pBuf } },
+                        { binding: 1, resource: { buffer: tBuf } },
+                        { binding: 2, resource: { buffer: uBuf } },
+                    ],
+                });
+                pipelineC = device.createComputePipeline({
+                    layout: device.createPipelineLayout({
+                        bindGroupLayouts: [bglC],
+                    }),
+                    compute: { module: modC, entryPoint: "main" },
+                });
+
+                const bglR = device.createBindGroupLayout({
+                    entries: [
+                        {
+                            binding: 0,
+                            visibility: GPUShaderStage.VERTEX,
+                            buffer: { type: "read-only-storage" },
+                        },
+                        {
+                            binding: 2,
+                            visibility: GPUShaderStage.VERTEX,
+                            buffer: { type: "uniform" },
+                        },
+                    ],
+                });
+                bgR = device.createBindGroup({
+                    layout: bglR,
+                    entries: [
+                        { binding: 0, resource: { buffer: pBuf } },
+                        { binding: 2, resource: { buffer: uBuf } },
+                    ],
+                });
+                pipelineR = device.createRenderPipeline({
+                    layout: device.createPipelineLayout({
+                        bindGroupLayouts: [bglR],
+                    }),
+                    vertex: { module: modR, entryPoint: "vs" },
+                    fragment: {
+                        module: modR,
+                        entryPoint: "fs",
+                        targets: [
+                            {
+                                format: navigator.gpu.getPreferredCanvasFormat(),
+                                blend: {
+                                    color: {
+                                        srcFactor: "src-alpha",
+                                        dstFactor: "one",
+                                    },
+                                    alpha: {
+                                        srcFactor: "zero",
+                                        dstFactor: "one",
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                    primitive: { topology: "triangle-list" },
+                });
+
+                loop();
+            }
+
+            function createBuf(arr, usage) {
+                const buf = device.createBuffer({
+                    size: arr.byteLength,
+                    usage,
+                    mappedAtCreation: true,
+                });
+                new Float32Array(buf.getMappedRange()).set(arr);
+                buf.unmap();
+                return buf;
+            }
+
+            let time = 0;
+            function loop() {
+                time += 0.01;
+                params.morph += (params.targetMorph - params.morph) * 0.05;
+
+                device.queue.writeBuffer(
+                    uBuf,
+                    0,
+                    new Float32Array([
+                        mouse.x,
+                        mouse.y,
+                        0.016,
+                        time,
+                        CANVAS_W,
+                        CANVAS_H,
+                        params.morph,
+                        0,
+                    ]),
+                );
+
+                const enc = device.createCommandEncoder();
+
+                const cp = enc.beginComputePass();
+                cp.setPipeline(pipelineC);
+                cp.setBindGroup(0, bgC);
+                cp.dispatchWorkgroups(Math.ceil(PARTICLE_COUNT / 64));
+                cp.end();
+
+                const rp = enc.beginRenderPass({
+                    colorAttachments: [
+                        {
+                            view: context.getCurrentTexture().createView(),
+                            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                            loadOp: "clear",
+                            storeOp: "store",
+                        },
+                    ],
+                });
+                rp.setPipeline(pipelineR);
+                rp.setBindGroup(0, bgR);
+                rp.draw(6, PARTICLE_COUNT);
+                rp.end();
+
+                device.queue.submit([enc.finish()]);
+                requestAnimationFrame(loop);
+            }
+
+            // Logic
+            window.setShape = async (key) => {
+                // Update UI
+                document
+                    .querySelectorAll(".dock-btn")
+                    .forEach((b) => b.classList.remove("active"));
+                event.currentTarget.classList.add("active");
+                document.getElementById("mode-text").innerText =
+                    key.toUpperCase();
+
+                if (key === "fluid") {
+                    params.targetMorph = 0.0;
+                    return;
+                }
+
+                const points = await getPointsFromSVG(SHAPES[key]);
+                if (!points.length) return;
+
+                // Distribute targets
+                const tArr = new Float32Array(PARTICLE_COUNT * 2);
+                for (let i = 0; i < PARTICLE_COUNT; i++) {
+                    // Reuse points if particles > pixels
+                    const pIdx = i % (points.length / 2);
+                    // Jitter
+                    tArr[i * 2] = points[pIdx * 2] + (Math.random() - 0.5) * 2;
+                    tArr[i * 2 + 1] =
+                        points[pIdx * 2 + 1] + (Math.random() - 0.5) * 2;
+                }
+                device.queue.writeBuffer(tBuf, 0, tArr);
+                params.targetMorph = 1.0;
+            };
+
+            window.addEventListener("mousemove", (e) => {
+                mouse.x = e.clientX;
+                mouse.y = e.clientY;
+            });
+
+            init().catch(console.error);
+        </script>
+    </body>
+</html>

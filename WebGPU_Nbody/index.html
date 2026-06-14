@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="zh">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>WebGPU GPGPU N-Body Particle System</title>
+        <style>
+            body {
+                margin: 0;
+                overflow: hidden;
+                background-color: #050505;
+                color: white;
+                font-family: sans-serif;
+            }
+
+            canvas {
+                display: block;
+                width: 100vw;
+                height: 100vh;
+            }
+
+            #info {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                pointer-events: none;
+                background: rgba(0, 0, 0, 0.7);
+                padding: 10px;
+                border-radius: 4px;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div id="info">
+            <h3>WebGPU N-Body Simulation</h3>
+            <p>Particles: <span id="count">16384</span></p>
+            <p>FPS: <span id="fps">0</span></p>
+            <p>Status: <span id="status">Initializing...</span></p>
+        </div>
+        <canvas id="gfx"></canvas>
+
+        <script type="module">
+            /**
+             * 配置参数
+             */
+            const PARTICLE_COUNT = 4096; // 粒子数量 (建议是64的倍数，适应Workgroup)
+            const WORKGROUP_SIZE = 64;
+            const GRAVITY_CONSTANT = 0.0001; // 引力常数
+            const SOFTENING = 0.01; // 防止除以零的软化因子
+
+            // ---------------------------------------------------------
+            // WGSL Shaders
+            // ---------------------------------------------------------
+
+            // 1. 计算着色器 (Compute Shader): 处理物理模拟
+            const computeShaderCode = `
+struct Particle {
+    pos : vec2f,
+    vel : vec2f,
+};
+
+struct SimParams {
+    deltaT : f32,
+    gravity : f32,
+    softening : f32,
+    count : f32,
+};
+
+@group(0) @binding(0) var<uniform> params : SimParams;
+@group(0) @binding(1) var<storage, read> particlesIn : array<Particle>;
+@group(0) @binding(2) var<storage, read_write> particlesOut : array<Particle>;
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) GlobalInvocationID : vec3u) {
+    let index = GlobalInvocationID.x;
+    if (index >= u32(params.count)) {
+        return;
+    }
+
+    var myPos = particlesIn[index].pos;
+    var myVel = particlesIn[index].vel;
+    var force = vec2f(0.0, 0.0);
+
+    // N-Body 核心逻辑: 计算所有其他粒子对当前粒子的引力
+    // 这是一个 O(N^2) 的算法。为了性能，我们在WGSL中做了简单的循环。
+    // 在更复杂的实现中，会使用共享内存(Shared Memory)来分块加载数据以减少全局内存访问。
+
+    let count = u32(params.count);
+    for (var i = 0u; i < count; i++) {
+        if (i == index) { continue; }
+
+        let otherPos = particlesIn[i].pos;
+        let d = otherPos - myPos;
+        let distSq = dot(d, d) + params.softening; // distance^2 + softening
+        let dist = sqrt(distSq);
+
+        // F = G * m1 * m2 / r^2 (假设质量为1)
+        let f = params.gravity / distSq;
+
+        force += normalize(d) * f;
+    }
+
+    // 加上向中心的中心吸引力，保持粒子在屏幕内，形成星系状
+    let centerDir = vec2f(0.0) - myPos;
+    let centerDistSq = dot(centerDir, centerDir) + 0.1;
+    force += normalize(centerDir) * (0.05 / centerDistSq);
+
+    // 欧拉积分更新
+    myVel += force * params.deltaT;
+    myPos += myVel * params.deltaT;
+
+    // 写入输出缓冲区
+    particlesOut[index].pos = myPos;
+    particlesOut[index].vel = myVel;
+}
+`;
+
+            // 2. 渲染着色器 (Render Shader): 绘制粒子
+            const renderShaderCode = `
+struct VertexOutput {
+    @builtin(position) position : vec4f,
+    @location(0) color : vec4f,
+};
+
+struct Particle {
+    pos : vec2f,
+    vel : vec2f,
+};
+
+@group(0) @binding(0) var<storage, read> particles : array<Particle>;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertexIndex : u32) -> VertexOutput {
+    let particle = particles[vertexIndex];
+
+    var output : VertexOutput;
+    // 将坐标从 [-1, 1] 映射到裁剪空间。假设我们的模拟就在这个范围内。
+    output.position = vec4f(particle.pos, 0.0, 1.0);
+
+    // 根据速度计算颜色 (速度越快越亮/偏红)
+    let speed = length(particle.vel);
+    let r = min(speed * 40.0, 1.0);
+    let g = min(speed * 20.0, 0.6) + 0.2;
+    let b = 0.5 + min(speed * 10.0, 0.5);
+
+    output.color = vec4f(r, g, b, 1.0);
+    return output;
+}
+
+@fragment
+fn fs_main(@location(0) color : vec4f) -> @location(0) vec4f {
+    return color;
+}
+`;
+
+            // ---------------------------------------------------------
+            // Application Logic
+            // ---------------------------------------------------------
+
+            async function init() {
+                const canvas = document.getElementById("gfx");
+                const adapter = await navigator.gpu?.requestAdapter();
+                const statusSpan = document.getElementById("status");
+                const fpsSpan = document.getElementById("fps");
+
+                if (!adapter) {
+                    statusSpan.textContent =
+                        "WebGPU not supported on this browser.";
+                    return;
+                }
+
+                const device = await adapter.requestDevice();
+                const context = canvas.getContext("webgpu");
+                const presentationFormat =
+                    navigator.gpu.getPreferredCanvasFormat();
+
+                context.configure({
+                    device,
+                    format: presentationFormat,
+                    alphaMode: "premultiplied",
+                });
+
+                statusSpan.textContent = "Running";
+                document.getElementById("count").textContent = PARTICLE_COUNT;
+
+                // --- 数据初始化 ---
+                // 每个粒子包含 pos(2f), vel(2f) -> 4 floats -> 16 bytes
+                const particleUnitSize = 4 * 4;
+                const particleBufferSize = PARTICLE_COUNT * particleUnitSize;
+
+                // 创建初始数据 (CPU)
+                const initialData = new Float32Array(PARTICLE_COUNT * 4);
+                for (let i = 0; i < PARTICLE_COUNT; i++) {
+                    // 随机分布在圆环上
+                    const angle = Math.random() * Math.PI * 2;
+                    const radius = 0.3 + Math.random() * 0.4;
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+
+                    // 赋予切向速度以形成旋转效果
+                    const velocity = 0.15; // 基础速度
+                    const vx = -Math.sin(angle) * velocity;
+                    const vy = Math.cos(angle) * velocity;
+
+                    initialData[i * 4 + 0] = x;
+                    initialData[i * 4 + 1] = y;
+                    initialData[i * 4 + 2] = vx;
+                    initialData[i * 4 + 3] = vy;
+                }
+
+                // 创建两个 Storage Buffers (Ping-Pong)
+                // 一个用于读取上一帧数据，一个用于写入当前帧计算结果
+                const bufferA = device.createBuffer({
+                    size: particleBufferSize,
+                    usage:
+                        GPUBufferUsage.STORAGE |
+                        GPUBufferUsage.VERTEX |
+                        GPUBufferUsage.COPY_DST,
+                    mappedAtCreation: true,
+                });
+                new Float32Array(bufferA.getMappedRange()).set(initialData);
+                bufferA.unmap();
+
+                const bufferB = device.createBuffer({
+                    size: particleBufferSize,
+                    usage:
+                        GPUBufferUsage.STORAGE |
+                        GPUBufferUsage.VERTEX |
+                        GPUBufferUsage.COPY_DST,
+                });
+                // B不需要初始化，第一帧会写入
+
+                // Uniform Buffer (Sim Params)
+                const uniformBufferSize = 4 * 4; // 4 floats
+                const uniformBuffer = device.createBuffer({
+                    size: uniformBufferSize,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                });
+
+                // --- Pipelines Setup ---
+
+                // 1. Compute Pipeline
+                const computeModule = device.createShaderModule({
+                    code: computeShaderCode,
+                });
+                const computeBindGroupLayout = device.createBindGroupLayout({
+                    entries: [
+                        {
+                            binding: 0,
+                            visibility: GPUShaderStage.COMPUTE,
+                            buffer: { type: "uniform" },
+                        },
+                        {
+                            binding: 1,
+                            visibility: GPUShaderStage.COMPUTE,
+                            buffer: { type: "read-only-storage" },
+                        },
+                        {
+                            binding: 2,
+                            visibility: GPUShaderStage.COMPUTE,
+                            buffer: { type: "storage" },
+                        },
+                    ],
+                });
+
+                const computePipeline = device.createComputePipeline({
+                    layout: device.createPipelineLayout({
+                        bindGroupLayouts: [computeBindGroupLayout],
+                    }),
+                    compute: { module: computeModule, entryPoint: "main" },
+                });
+
+                // 创建两个 BindGroup 用于 Ping-Pong 交换
+                // Group 0: Read A, Write B
+                const computeBindGroup0 = device.createBindGroup({
+                    layout: computeBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: uniformBuffer } },
+                        { binding: 1, resource: { buffer: bufferA } },
+                        { binding: 2, resource: { buffer: bufferB } },
+                    ],
+                });
+
+                // Group 1: Read B, Write A
+                const computeBindGroup1 = device.createBindGroup({
+                    layout: computeBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: uniformBuffer } },
+                        { binding: 1, resource: { buffer: bufferB } },
+                        { binding: 2, resource: { buffer: bufferA } },
+                    ],
+                });
+
+                // 2. Render Pipeline
+                const renderModule = device.createShaderModule({
+                    code: renderShaderCode,
+                });
+                const renderBindGroupLayout = device.createBindGroupLayout({
+                    entries: [
+                        {
+                            binding: 0,
+                            visibility: GPUShaderStage.VERTEX,
+                            buffer: { type: "read-only-storage" },
+                        },
+                    ],
+                });
+
+                const renderPipeline = device.createRenderPipeline({
+                    layout: device.createPipelineLayout({
+                        bindGroupLayouts: [renderBindGroupLayout],
+                    }),
+                    vertex: { module: renderModule, entryPoint: "vs_main" },
+                    fragment: {
+                        module: renderModule,
+                        entryPoint: "fs_main",
+                        targets: [{ format: presentationFormat }],
+                    },
+                    primitive: { topology: "point-list" },
+                });
+
+                const renderBindGroupA = device.createBindGroup({
+                    layout: renderBindGroupLayout,
+                    entries: [{ binding: 0, resource: { buffer: bufferA } }],
+                });
+
+                const renderBindGroupB = device.createBindGroup({
+                    layout: renderBindGroupLayout,
+                    entries: [{ binding: 0, resource: { buffer: bufferB } }],
+                });
+
+                // --- Render Loop ---
+
+                let frameCount = 0;
+                let t = 0; // frame index for ping-pong
+                let lastTime = performance.now();
+                let fpsTime = lastTime;
+                let fpsFrames = 0;
+
+                function frame() {
+                    const now = performance.now();
+                    const dt = Math.min((now - lastTime) / 1000, 0.1); // Cap dt
+                    lastTime = now;
+
+                    // 计算 FPS
+                    fpsFrames++;
+                    if (now - fpsTime >= 1000) {
+                        fpsSpan.textContent = fpsFrames;
+                        fpsFrames = 0;
+                        fpsTime = now;
+                    }
+
+                    // 更新 Uniforms
+                    // Params: deltaT, gravity, softening, count
+                    const params = new Float32Array([
+                        0.01,
+                        GRAVITY_CONSTANT,
+                        SOFTENING,
+                        PARTICLE_COUNT,
+                    ]);
+                    device.queue.writeBuffer(uniformBuffer, 0, params);
+
+                    const commandEncoder = device.createCommandEncoder();
+
+                    // Step 1: Compute Pass (Physics)
+                    // 如果 t 是偶数，从A读写到B；如果 t 是奇数，从B读写到A
+                    const computePass = commandEncoder.beginComputePass();
+                    computePass.setPipeline(computePipeline);
+                    computePass.setBindGroup(
+                        0,
+                        t % 2 === 0 ? computeBindGroup0 : computeBindGroup1,
+                    );
+                    computePass.dispatchWorkgroups(
+                        Math.ceil(PARTICLE_COUNT / WORKGROUP_SIZE),
+                    );
+                    computePass.end();
+
+                    // Step 2: Render Pass (Drawing)
+                    // 我们渲染 Compute Pass 刚刚写入的那个 Buffer (结果 Buffer)
+                    // 如果 t 是偶数，Compute 写到了 B，所以渲染 B
+                    const renderPass = commandEncoder.beginRenderPass({
+                        colorAttachments: [
+                            {
+                                view: context.getCurrentTexture().createView(),
+                                clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+                                loadOp: "clear",
+                                storeOp: "store",
+                            },
+                        ],
+                    });
+                    renderPass.setPipeline(renderPipeline);
+                    renderPass.setBindGroup(
+                        0,
+                        t % 2 === 0 ? renderBindGroupB : renderBindGroupA,
+                    );
+                    renderPass.draw(PARTICLE_COUNT);
+                    renderPass.end();
+
+                    device.queue.submit([commandEncoder.finish()]);
+
+                    t++;
+                    requestAnimationFrame(frame);
+                }
+
+                requestAnimationFrame(frame);
+            }
+
+            init();
+        </script>
+    </body>
+</html>

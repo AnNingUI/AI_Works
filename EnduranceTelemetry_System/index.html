@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Interstellar Weather Station & Ranger Flight</title>
+        <style>
+            :root {
+                --bg-color: #030305;
+                --card-bg: rgba(10, 10, 15, 0.75);
+                --border-color: rgba(255, 255, 255, 0.08);
+                --text-primary: #e2e8f0;
+                --text-secondary: #94a3b8;
+                --accent-gold: #c5a880;
+                --accent-blue: #38bdf8;
+                --accent-red: #f43f5e;
+                --font-mono: "Courier New", Courier, monospace;
+            }
+
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
+            body {
+                background-color: var(--bg-color);
+                color: var(--text-primary);
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    Helvetica, Arial, sans-serif;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                padding: 2rem;
+                overflow-x: hidden;
+                background-image:
+                    radial-gradient(
+                        circle at 50% 30%,
+                        rgba(20, 20, 35, 0.6) 0%,
+                        transparent 70%
+                    ),
+                    radial-gradient(
+                        circle at 10% 80%,
+                        rgba(15, 23, 42, 0.5) 0%,
+                        transparent 50%
+                    );
+            }
+
+            header {
+                text-align: center;
+                margin-bottom: 2.5rem;
+                width: 100%;
+                max-width: 1200px;
+            }
+
+            .telemetry-title {
+                font-family: var(--font-mono);
+                font-size: 0.8rem;
+                letter-spacing: 0.4em;
+                text-transform: uppercase;
+                color: var(--accent-gold);
+                margin-bottom: 0.5rem;
+            }
+
+            h1 {
+                font-size: 2rem;
+                font-weight: 300;
+                letter-spacing: -0.02em;
+                color: #ffffff;
+            }
+
+            /* 控制面板 */
+            .controls {
+                display: flex;
+                gap: 1rem;
+                margin-bottom: 2rem;
+                background: rgba(255, 255, 255, 0.03);
+                padding: 0.4rem;
+                border-radius: 30px;
+                border: 1px solid var(--border-color);
+            }
+
+            .btn {
+                background: transparent;
+                border: none;
+                color: var(--text-secondary);
+                padding: 0.5rem 1.2rem;
+                border-radius: 20px;
+                cursor: pointer;
+                font-size: 0.85rem;
+                font-family: var(--font-mono);
+                transition: all 0.3s ease;
+            }
+
+            .btn.active,
+            .btn:hover {
+                color: #ffffff;
+                background: rgba(255, 255, 255, 0.1);
+                box-shadow: 0 0 15px rgba(255, 255, 255, 0.05);
+            }
+
+            /* 布局容器 */
+            .dashboard-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+                gap: 1.5rem;
+                width: 100%;
+                max-width: 1200px;
+                perspective: 1000px;
+            }
+
+            /* 天气卡片 */
+            .weather-card {
+                position: relative;
+                height: 420px;
+                background: var(--card-bg);
+                border-radius: 16px;
+                border: 1px solid var(--border-color);
+                overflow: hidden;
+                backdrop-filter: blur(20px);
+                -webkit-backdrop-filter: blur(20px);
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                padding: 1.5rem;
+                transition:
+                    transform 0.5s cubic-bezier(0.25, 1, 0.5, 1),
+                    border-color 0.3s ease,
+                    box-shadow 0.3s ease;
+            }
+
+            .weather-card:hover {
+                transform: translateY(-5px);
+                border-color: rgba(255, 255, 255, 0.18);
+                box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+            }
+
+            /* 动画 Canvas */
+            .card-canvas {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 1;
+                pointer-events: none;
+            }
+
+            /* 卡片内容上屏 */
+            .card-ui {
+                position: relative;
+                z-index: 2;
+                pointer-events: none;
+            }
+
+            .card-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+            }
+
+            .location-info {
+                display: flex;
+                flex-direction: column;
+            }
+
+            .system-name {
+                font-family: var(--font-mono);
+                font-size: 0.7rem;
+                color: var(--accent-gold);
+                letter-spacing: 0.1em;
+                margin-bottom: 0.2rem;
+            }
+
+            .planet-name {
+                font-size: 1.2rem;
+                font-weight: 500;
+                color: #ffffff;
+            }
+
+            .telemetry-data {
+                font-family: var(--font-mono);
+                font-size: 0.7rem;
+                color: var(--text-secondary);
+                text-align: right;
+                line-height: 1.4;
+            }
+
+            .card-footer {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-end;
+            }
+
+            .weather-info {
+                display: flex;
+                flex-direction: column;
+            }
+
+            .temperature {
+                font-size: 3rem;
+                font-weight: 200;
+                color: #ffffff;
+                line-height: 1;
+                margin-bottom: 0.2rem;
+            }
+
+            .condition-desc {
+                font-size: 0.85rem;
+                color: var(--text-secondary);
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
+
+            /* 时间膨胀指数（交互动效） */
+            .dilation-indicator {
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                border: 1px dashed rgba(255, 255, 255, 0.3);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                position: relative;
+                animation: rotateDilation 12s linear infinite;
+            }
+
+            .dilation-indicator::after {
+                content: "";
+                width: 6px;
+                height: 6px;
+                background: var(--accent-gold);
+                border-radius: 50%;
+                position: absolute;
+                top: 3px;
+            }
+
+            @keyframes rotateDilation {
+                0% {
+                    transform: rotate(0deg);
+                }
+                100% {
+                    transform: rotate(360deg);
+                }
+            }
+
+            /* 简易响应式适配 */
+            @media (max-width: 768px) {
+                .dashboard-grid {
+                    grid-template-columns: 1fr;
+                }
+                body {
+                    padding: 1rem;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div class="telemetry-title">Endurance Telemetry System</div>
+            <h1>行星环境多维观测站</h1>
+        </header>
+
+        <div class="controls">
+            <button class="btn active" onclick="setSimulationSpeed(1)">
+                1.0x 标准时流
+            </button>
+            <button class="btn" onclick="setSimulationSpeed(0.1)">
+                0.1x 临界引力源
+            </button>
+            <button class="btn" onclick="setSimulationSpeed(3.0)">
+                3.0x 时空跃迁
+            </button>
+        </div>
+
+        <div class="dashboard-grid">
+            <!-- 晴天卡片 - 卡冈图雅极光 -->
+            <div class="weather-card" id="card-sunny">
+                <canvas class="card-canvas" id="canvas-sunny"></canvas>
+                <div class="card-ui card-header">
+                    <div class="location-info">
+                        <span class="system-name"
+                            >A5-E01 / GARGANTUA SYSTEM</span
+                        >
+                        <span class="planet-name">Miller's Orbit</span>
+                    </div>
+                    <div class="telemetry-data">
+                        GRAVITY: 1.3G<br />
+                        RADIATION: CRITICAL
+                    </div>
+                </div>
+                <div class="card-ui card-footer">
+                    <div class="weather-info">
+                        <span class="temperature">37°C</span>
+                        <span class="condition-desc">强光辐射 / 晴天</span>
+                    </div>
+                    <div class="dilation-indicator"></div>
+                </div>
+            </div>
+
+            <!-- 风暴卡片 - 尘暴 -->
+            <div class="weather-card" id="card-wind">
+                <canvas class="card-canvas" id="canvas-wind"></canvas>
+                <div class="card-ui card-header">
+                    <div class="location-info">
+                        <span class="system-name">SOL-03 / EARTH</span>
+                        <span class="planet-name">Cooper's Farm</span>
+                    </div>
+                    <div class="telemetry-data">
+                        GRAVITY: 1.0G<br />
+                        BAROMETER: 980hPa
+                    </div>
+                </div>
+                <div class="card-ui card-footer">
+                    <div class="weather-info">
+                        <span class="temperature">24°C</span>
+                        <span class="condition-desc">重力风暴 / 气流尘埃</span>
+                    </div>
+                    <div
+                        class="dilation-indicator"
+                        style="animation-duration: 4s"
+                    ></div>
+                </div>
+            </div>
+
+            <!-- 降雨卡片 - 海洋巨浪 -->
+            <div class="weather-card" id="card-rain">
+                <canvas class="card-canvas" id="canvas-rain"></canvas>
+                <div class="card-ui card-header">
+                    <div class="location-info">
+                        <span class="system-name">A5-E01 / MILLER'S WORLD</span>
+                        <span class="planet-name">Shallow Ocean</span>
+                    </div>
+                    <div class="telemetry-data">
+                        GRAVITY: 1.3G<br />
+                        WAVE DEPTH: 1.2KM
+                    </div>
+                </div>
+                <div class="card-ui card-footer">
+                    <div class="weather-info">
+                        <span class="temperature">15°C</span>
+                        <span class="condition-desc">湍流降雨 / 垂直急流</span>
+                    </div>
+                    <div
+                        class="dilation-indicator"
+                        style="animation-duration: 25s"
+                    ></div>
+                </div>
+            </div>
+
+            <!-- 降雪卡片 - 冰封星云 -->
+            <div class="weather-card" id="card-snow">
+                <canvas class="card-canvas" id="canvas-snow"></canvas>
+                <div class="card-ui card-header">
+                    <div class="location-info">
+                        <span class="system-name">B2-K09 / MANN'S WORLD</span>
+                        <span class="planet-name">Frozen Glaciers</span>
+                    </div>
+                    <div class="telemetry-data">
+                        GRAVITY: 0.8G<br />
+                        SURFACE: CO₂ ICE
+                    </div>
+                </div>
+                <div class="card-ui card-footer">
+                    <div class="weather-info">
+                        <span class="temperature">-45°C</span>
+                        <span class="condition-desc">凝华降雪 / 悬浮冰晶</span>
+                    </div>
+                    <div
+                        class="dilation-indicator"
+                        style="animation-duration: 60s"
+                    ></div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let timeDilation = 1.0;
+
+            function setSimulationSpeed(speed) {
+                timeDilation = speed;
+                document.querySelectorAll(".btn").forEach((btn) => {
+                    btn.classList.remove("active");
+                    if (btn.innerText.includes(speed + "x")) {
+                        btn.classList.add("active");
+                    }
+                });
+            }
+
+            // 飞船物理状态管理类
+            class Spacecraft {
+                constructor(type, canvasWidth, canvasHeight) {
+                    this.type = type;
+                    this.reset(canvasWidth, canvasHeight);
+                    // 确保初始位置分布自然
+                    if (type === "sunny") {
+                        this.angle = Math.random() * Math.PI * 2;
+                        this.orbitRadius = 85;
+                    } else {
+                        this.x = Math.random() * canvasWidth;
+                    }
+                }
+
+                reset(width, height) {
+                    this.width = width;
+                    this.height = height;
+                    this.scale = 0.35; // 整体飞船尺寸比例
+                    this.targetY = height * 0.45 + (Math.random() - 0.5) * 40;
+                    this.thrustIntensity = 1;
+
+                    if (this.type === "rain") {
+                        // 降雨天：从右上俯冲至左下
+                        this.x = width + 50;
+                        this.y = -20;
+                        this.vx = -(Math.random() * 0.8 + 0.6);
+                        this.vy = Math.random() * 0.4 + 0.5;
+                        this.angle = Math.atan2(this.vy, this.vx);
+                    } else if (this.type === "wind") {
+                        // 风暴天：逆风向右艰难平移推进，带有机头抖动
+                        this.x = -60;
+                        this.y = this.targetY;
+                        this.vx = Math.random() * 0.3 + 0.2;
+                        this.vy = 0;
+                        this.angle = 0.05; // 微微昂首
+                    } else if (this.type === "snow") {
+                        // 降雪天：水平匀速缓慢滑行
+                        this.x = width + 60;
+                        this.y = this.targetY;
+                        this.vx = -(Math.random() * 0.15 + 0.1);
+                        this.vy = 0;
+                        this.angle = Math.PI; // 机头朝左
+                    } else {
+                        // 晴天轨道：初始化圆周轨道变量
+                        this.angle = 0;
+                        this.orbitRadius = 85;
+                    }
+                }
+
+                update(width, height, speedModifier) {
+                    if (this.type === "sunny") {
+                        // 绕吸积盘做椭圆轨道运动
+                        this.angle += 0.005 * speedModifier;
+                        this.x =
+                            width / 2 + Math.cos(this.angle) * this.orbitRadius;
+                        this.y =
+                            height / 2 +
+                            Math.sin(this.angle) * this.orbitRadius * 0.4;
+                        // 根据近景远景计算缩放
+                        const z = Math.sin(this.angle); // -1 到 1
+                        this.scale = 0.25 + (z + 1) * 0.12;
+                        this.renderAngle = this.angle + Math.PI / 2 + z * 0.15; // 微调切线朝向
+                    } else {
+                        // 直线机动轨迹
+                        this.x += this.vx * speedModifier;
+                        this.y += this.vy * speedModifier;
+
+                        // 风暴环境中的随机颠簸晃动
+                        if (this.type === "wind") {
+                            this.y =
+                                this.targetY + Math.sin(Date.now() * 0.008) * 3;
+                            this.angle = 0.05 + (Math.random() - 0.5) * 0.03;
+                            // 随机姿态发动机点火效果
+                            this.thrustIntensity = 0.7 + Math.random() * 0.6;
+                        }
+
+                        // 越界重置检测
+                        if (this.type === "wind" && this.x > width + 60) {
+                            this.reset(width, height);
+                        } else if (
+                            (this.type === "rain" || this.type === "snow") &&
+                            this.x < -60
+                        ) {
+                            this.reset(width, height);
+                        }
+                    }
+                }
+
+                draw(ctx) {
+                    ctx.save();
+                    ctx.translate(this.x, this.y);
+                    ctx.rotate(
+                        this.type === "sunny" ? this.renderAngle : this.angle,
+                    );
+                    ctx.scale(this.scale, this.scale);
+
+                    // 绘制巡航者号 (Ranger) 几何机身
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = "rgba(255, 255, 255, 0.15)";
+
+                    // 机身主体（流线型扁平多边形）
+                    ctx.fillStyle = "#ffffff";
+                    ctx.beginPath();
+                    ctx.moveTo(35, 0); // 机头
+                    ctx.lineTo(5, -12); // 右翼前缘
+                    ctx.lineTo(-30, -18); // 右翼尖
+                    ctx.lineTo(-25, -6); // 右侧引擎侧板
+                    ctx.lineTo(-25, 6); // 左侧引擎侧板
+                    ctx.lineTo(-30, 18); // 左翼尖
+                    ctx.lineTo(5, 12); // 左翼前缘
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // 黑色隔热瓦与驾驶舱舷窗
+                    ctx.fillStyle = "#0a0a0f";
+                    ctx.beginPath();
+                    ctx.moveTo(20, -4);
+                    ctx.lineTo(20, 4);
+                    ctx.lineTo(5, 6);
+                    ctx.lineTo(-10, 5);
+                    ctx.lineTo(-10, -5);
+                    ctx.lineTo(5, -6);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // 尾部主推进器高能光焰
+                    ctx.shadowBlur = 20;
+                    if (this.type === "rain") {
+                        ctx.shadowColor = "rgba(56, 189, 248, 0.9)"; // 强等离子流
+                        ctx.fillStyle = "rgba(14, 165, 233, 0.95)";
+                    } else if (this.type === "snow") {
+                        ctx.shadowColor = "rgba(244, 63, 94, 0.6)"; // 低温怠速
+                        ctx.fillStyle = "rgba(244, 63, 94, 0.7)";
+                    } else {
+                        ctx.shadowColor = "rgba(197, 168, 128, 0.9)"; // 轨道动力
+                        ctx.fillStyle = "rgba(197, 168, 128, 0.95)";
+                    }
+
+                    ctx.globalCompositeOperation = "screen";
+
+                    // 渲染主喷口光焰
+                    ctx.beginPath();
+                    ctx.ellipse(
+                        -26,
+                        -5,
+                        18 * this.thrustIntensity,
+                        4,
+                        0,
+                        Math.PI,
+                        0,
+                        true,
+                    );
+                    ctx.ellipse(
+                        -26,
+                        5,
+                        18 * this.thrustIntensity,
+                        4,
+                        0,
+                        Math.PI,
+                        0,
+                        true,
+                    );
+                    ctx.fill();
+
+                    // 高亮核心
+                    ctx.fillStyle = "#ffffff";
+                    ctx.beginPath();
+                    ctx.ellipse(-25, -5, 6, 2, 0, Math.PI, 0, true);
+                    ctx.ellipse(-25, 5, 6, 2, 0, Math.PI, 0, true);
+                    ctx.fill();
+
+                    ctx.restore();
+                }
+            }
+
+            // 天气动态画布核心管理器
+            class WeatherEngine {
+                constructor(canvasId, type) {
+                    this.canvas = document.getElementById(canvasId);
+                    this.ctx = this.canvas.getContext("2d");
+                    this.type = type;
+                    this.particles = [];
+                    this.resize();
+
+                    // 组装巡航者号模块
+                    this.spacecraft = new Spacecraft(
+                        type,
+                        this.width,
+                        this.height,
+                    );
+
+                    window.addEventListener("resize", () => this.resize());
+                    this.initParticles();
+                }
+
+                resize() {
+                    const rect =
+                        this.canvas.parentElement.getBoundingClientRect();
+                    this.canvas.width = rect.width * window.devicePixelRatio;
+                    this.canvas.height = rect.height * window.devicePixelRatio;
+                    this.ctx.scale(
+                        window.devicePixelRatio,
+                        window.devicePixelRatio,
+                    );
+                    this.width = rect.width;
+                    this.height = rect.height;
+                    if (this.spacecraft) {
+                        this.spacecraft.width = this.width;
+                        this.spacecraft.height = this.height;
+                    }
+                }
+
+                initParticles() {
+                    this.particles = [];
+                    if (this.type === "sunny") {
+                        // 星际背景尘埃、吸积环粒子
+                        for (let i = 0; i < 45; i++) {
+                            this.particles.push({
+                                x: this.width / 2,
+                                y: this.height / 2,
+                                radius: Math.random() * 70 + 35,
+                                angle: Math.random() * Math.PI * 2,
+                                speed: Math.random() * 0.006 + 0.002,
+                                alpha: Math.random() * 0.4 + 0.1,
+                            });
+                        }
+                    } else if (this.type === "wind") {
+                        for (let i = 0; i < 50; i++) {
+                            this.particles.push({
+                                x: Math.random() * this.width,
+                                y: Math.random() * this.height,
+                                length: Math.random() * 35 + 15,
+                                speed: Math.random() * 3.5 + 2.5,
+                                thickness: Math.random() * 1.2 + 0.4,
+                                alpha: Math.random() * 0.35 + 0.1,
+                            });
+                        }
+                    } else if (this.type === "rain") {
+                        for (let i = 0; i < 70; i++) {
+                            this.particles.push({
+                                x: Math.random() * this.width,
+                                y: Math.random() * -this.height,
+                                speed: Math.random() * 13 + 9,
+                                length: Math.random() * 25 + 15,
+                                alpha: Math.random() * 0.35 + 0.15,
+                            });
+                        }
+                    } else if (this.type === "snow") {
+                        for (let i = 0; i < 45; i++) {
+                            this.particles.push({
+                                x: Math.random() * this.width,
+                                y: Math.random() * this.height,
+                                radius: Math.random() * 2 + 0.6,
+                                density: Math.random() * 0.9 + 0.4,
+                                opacity: Math.random() * 0.45 + 0.15,
+                                swing: Math.random() * 0.02,
+                                swingStep: Math.random() * 100,
+                            });
+                        }
+                    }
+                }
+
+                updateAndDraw() {
+                    this.ctx.clearRect(0, 0, this.width, this.height);
+
+                    // 第一步：若飞船处于远景，先渲染飞船（实现深度透视遮罩）
+                    const deepScene =
+                        this.type === "sunny" &&
+                        Math.sin(this.spacecraft.angle) < 0;
+                    if (deepScene) {
+                        this.spacecraft.update(
+                            this.width,
+                            this.height,
+                            timeDilation,
+                        );
+                        this.spacecraft.draw(this.ctx);
+                    }
+
+                    // 第二步：渲染天气粒子系统
+                    if (this.type === "sunny") {
+                        // 渲染高能黑洞引力盘光斑
+                        let gradient = this.ctx.createRadialGradient(
+                            this.width / 2,
+                            this.height / 2,
+                            5,
+                            this.width / 2,
+                            this.height / 2,
+                            110,
+                        );
+                        gradient.addColorStop(0, "rgba(197, 168, 128, 0.45)");
+                        gradient.addColorStop(0.5, "rgba(197, 168, 128, 0.08)");
+                        gradient.addColorStop(1, "rgba(0,0,0,0)");
+                        this.ctx.fillStyle = gradient;
+                        this.ctx.beginPath();
+                        this.ctx.arc(
+                            this.width / 2,
+                            this.height / 2,
+                            110,
+                            0,
+                            Math.PI * 2,
+                        );
+                        this.ctx.fill();
+
+                        this.particles.forEach((p) => {
+                            p.angle += p.speed * timeDilation;
+                            this.ctx.beginPath();
+                            let rx =
+                                this.width / 2 + Math.cos(p.angle) * p.radius;
+                            let ry =
+                                this.height / 2 +
+                                Math.sin(p.angle) * p.radius * 0.4;
+                            this.ctx.arc(rx, ry, 1.2, 0, Math.PI * 2);
+                            this.ctx.fillStyle = `rgba(197, 168, 128, ${p.alpha})`;
+                            this.ctx.fill();
+                        });
+                    } else if (this.type === "wind") {
+                        this.particles.forEach((p) => {
+                            p.x += p.speed * 2.8 * timeDilation;
+                            if (p.x > this.width) {
+                                p.x = -p.length;
+                                p.y = Math.random() * this.height;
+                            }
+                            this.ctx.beginPath();
+                            this.ctx.strokeStyle = `rgba(226, 232, 240, ${p.alpha})`;
+                            this.ctx.lineWidth = p.thickness;
+                            this.ctx.moveTo(p.x, p.y);
+                            this.ctx.lineTo(
+                                p.x + p.length,
+                                p.y + Math.sin(p.x * 0.015) * 4,
+                            );
+                            this.ctx.stroke();
+                        });
+                    } else if (this.type === "rain") {
+                        this.particles.forEach((p) => {
+                            p.y += p.speed * timeDilation;
+                            if (p.y > this.height) {
+                                p.y = Math.random() * -50;
+                                p.x = Math.random() * this.width;
+                            }
+                            this.ctx.beginPath();
+                            this.ctx.strokeStyle = `rgba(56, 189, 248, ${p.alpha})`;
+                            this.ctx.lineWidth = 1;
+                            this.ctx.moveTo(p.x, p.y);
+                            this.ctx.lineTo(p.x, p.y + p.length);
+                            this.ctx.stroke();
+                        });
+                    } else if (this.type === "snow") {
+                        this.particles.forEach((p) => {
+                            p.y += p.density * 0.75 * timeDilation;
+                            p.swingStep += p.swing * timeDilation;
+                            p.x += Math.sin(p.swingStep) * 0.4;
+
+                            if (p.y > this.height) {
+                                p.y = -10;
+                                p.x = Math.random() * this.width;
+                            }
+
+                            this.ctx.beginPath();
+                            this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                            this.ctx.fillStyle = `rgba(255, 255, 255, ${p.opacity})`;
+                            this.ctx.fill();
+                        });
+                    }
+
+                    // 第三步：若飞船处于近景或普通直线轨迹，后渲染（覆盖在粒子之上）
+                    if (!deepScene) {
+                        this.spacecraft.update(
+                            this.width,
+                            this.height,
+                            timeDilation,
+                        );
+                        this.spacecraft.draw(this.ctx);
+                    }
+                }
+            }
+
+            const engines = [
+                new WeatherEngine("canvas-sunny", "sunny"),
+                new WeatherEngine("canvas-wind", "wind"),
+                new WeatherEngine("canvas-rain", "rain"),
+                new WeatherEngine("canvas-snow", "snow"),
+            ];
+
+            function tick() {
+                engines.forEach((engine) => engine.updateAndDraw());
+                requestAnimationFrame(tick);
+            }
+            tick();
+        </script>
+    </body>
+</html>

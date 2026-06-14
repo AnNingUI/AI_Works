@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>WebGPU Fixed: 100k Particles</title>
+        <style>
+            :root {
+                --md-sys-color-surface: rgba(20, 20, 25, 0.4);
+                --glass-border: 1px solid rgba(255, 255, 255, 0.15);
+                --font-stack: system-ui, -apple-system, sans-serif;
+            }
+
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
+            body {
+                font-family: var(--font-stack);
+                color: #fff;
+                min-height: 100vh;
+                background-color: transparent; /* 关键：透明背景 */
+                overflow: hidden; /* 防止滚动条 */
+                position: relative;
+            }
+
+            /* Canvas 放在最底层 */
+            #gpu-canvas {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 0;
+                background: #050508; /* CSS 背景色兜底 */
+            }
+
+            /* UI 层 */
+            #main-ui {
+                position: relative;
+                z-index: 10;
+                padding: 40px;
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 24px;
+                max-width: 1600px;
+                margin: 0 auto;
+                pointer-events: none;
+            }
+
+            .glass-card,
+            .fab {
+                pointer-events: auto;
+            }
+
+            .glass-card {
+                background: var(--md-sys-color-surface);
+                backdrop-filter: blur(20px);
+                -webkit-backdrop-filter: blur(20px);
+                border: var(--glass-border);
+                border-radius: 28px;
+                padding: 32px;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+                transition: transform 0.3s;
+            }
+            .glass-card:hover {
+                transform: translateY(-4px);
+                background: rgba(50, 50, 60, 0.6);
+            }
+
+            h1 {
+                font-size: 3rem;
+                font-weight: 800;
+                background: linear-gradient(to right, #fff, #a080ff);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 16px;
+            }
+
+            .fab {
+                position: fixed;
+                bottom: 40px;
+                right: 40px;
+                width: 70px;
+                height: 70px;
+                border-radius: 20px;
+                background: #d0bcff;
+                color: #381e72;
+                border: none;
+                cursor: pointer;
+                z-index: 100;
+                box-shadow: 0 4px 20px rgba(100, 80, 255, 0.4);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+
+            #error-overlay {
+                display: none;
+                position: fixed;
+                inset: 0;
+                background: #200;
+                z-index: 9999;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+                text-align: center;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="error-overlay"><h2 id="error-msg">WebGPU Error</h2></div>
+
+        <canvas id="gpu-canvas"></canvas>
+
+        <main id="main-ui">
+            <section class="glass-card">
+                <h1>Particle<br />Symphony</h1>
+                <p>100,000 Particles running on GPU Compute Shaders.</p>
+                <p style="margin-top: 10px; opacity: 0.7">
+                    Move mouse to interact.
+                </p>
+            </section>
+
+            <section class="glass-card">
+                <h2 style="color: #d0bcff">Debug Info</h2>
+                <div
+                    id="debug-text"
+                    style="font-family: monospace; margin-top: 10px"
+                >
+                    Initializing...
+                </div>
+            </section>
+        </main>
+
+        <button class="fab" onclick="resetParticles()">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                <path
+                    d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+                />
+            </svg>
+        </button>
+
+        <script type="module">
+            // ==========================================
+            // FIXED WEBGPU IMPLEMENTATION
+            // ==========================================
+            const canvas = document.getElementById("gpu-canvas");
+            const debugEl = document.getElementById("debug-text");
+
+            if (!navigator.gpu) {
+                showError("WebGPU not supported. Use Chrome 113+.");
+            }
+
+            function showError(msg) {
+                const el = document.getElementById("error-overlay");
+                el.style.display = "flex";
+                document.getElementById("error-msg").innerText = msg;
+                throw new Error(msg);
+            }
+
+            // Global State
+            let device, context;
+            let particleBuffer, uniformBuffer;
+            let computePipeline, renderPipeline;
+            let computeBindGroup, renderBindGroup;
+            let mouse = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+            const NUM_PARTICLES = 100000;
+
+            // Input
+            window.addEventListener("mousemove", (e) => {
+                mouse.x = e.clientX;
+                mouse.y = e.clientY;
+            });
+            window.addEventListener("resize", () => window.location.reload()); // Simple resize handling
+
+            async function init() {
+                try {
+                    const adapter = await navigator.gpu.requestAdapter();
+                    if (!adapter) return showError("No GPU Adapter found.");
+                    device = await adapter.requestDevice();
+                    context = canvas.getContext("webgpu");
+
+                    canvas.width = window.innerWidth;
+                    canvas.height = window.innerHeight;
+                    const format = navigator.gpu.getPreferredCanvasFormat();
+                    context.configure({
+                        device,
+                        format,
+                        alphaMode: "premultiplied",
+                    });
+
+                    // ===========================================
+                    // 1. BUFFERS
+                    // ===========================================
+                    // Particles: [x, y, vx, vy] * NUM_PARTICLES
+                    const pSize = NUM_PARTICLES * 4 * 4;
+                    particleBuffer = device.createBuffer({
+                        size: pSize,
+                        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+                    });
+
+                    // Uniforms: [mouseX, mouseY, dt, time, width, height, pad, pad]
+                    uniformBuffer = device.createBuffer({
+                        size: 32,
+                        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                    });
+
+                    // Initialize Particles
+                    window.resetParticles = () => {
+                        const data = new Float32Array(NUM_PARTICLES * 4);
+                        for (let i = 0; i < NUM_PARTICLES; i++) {
+                            data[i * 4 + 0] = Math.random() * canvas.width;
+                            data[i * 4 + 1] = Math.random() * canvas.height;
+                            data[i * 4 + 2] = (Math.random() - 0.5) * 50;
+                            data[i * 4 + 3] = (Math.random() - 0.5) * 50;
+                        }
+                        device.queue.writeBuffer(particleBuffer, 0, data);
+                    };
+                    window.resetParticles();
+
+                    // ===========================================
+                    // 2. SHADER CODE SPLIT (The Fix)
+                    // ===========================================
+
+                    const commonCode = `
+            struct Particle { pos : vec2<f32>, vel : vec2<f32> }
+            struct SimParams { mouse : vec2<f32>, dt : f32, time: f32, screen : vec2<f32> }
+        `;
+
+                    // COMPUTE SHADER: Uses read_write
+                    const computeCode = `
+            ${commonCode}
+            @group(0) @binding(0) var<storage, read_write> particles : array<Particle>;
+            @group(0) @binding(1) var<uniform> params : SimParams;
+
+            @compute @workgroup_size(64)
+            fn main(@builtin(global_invocation_id) id : vec3<u32>) {
+                let i = id.x;
+                if (i >= arrayLength(&particles)) { return; }
+                var p = particles[i];
+
+                let toMouse = params.mouse - p.pos;
+                let dist = length(toMouse);
+                let dir = normalize(toMouse);
+
+                // Physics: Attraction + Curl
+                let force = dir * (1500.0 / (dist + 50.0));
+                p.vel += force * params.dt;
+                p.vel *= 0.96; // Friction
+
+                // Noise
+                p.vel.x += sin(f32(i)*0.1 + params.time) * 0.5;
+                p.vel.y += cos(f32(i)*0.1 + params.time) * 0.5;
+
+                p.pos += p.vel;
+
+                // Wrap
+                if (p.pos.x < 0.0) { p.pos.x = params.screen.x; }
+                if (p.pos.x > params.screen.x) { p.pos.x = 0.0; }
+                if (p.pos.y < 0.0) { p.pos.y = params.screen.y; }
+                if (p.pos.y > params.screen.y) { p.pos.y = 0.0; }
+
+                particles[i] = p;
+            }
+        `;
+
+                    // VERTEX SHADER: Uses read (read-only)
+                    const renderCode = `
+            ${commonCode}
+            @group(0) @binding(0) var<storage, read> particles : array<Particle>;
+            @group(0) @binding(1) var<uniform> params : SimParams;
+
+            struct VertexOut {
+                @builtin(position) pos : vec4<f32>,
+                @location(0) color : vec4<f32>,
+            }
+
+            @vertex
+            fn vs_main(@builtin(vertex_index) vIdx : u32, @builtin(instance_index) iIdx : u32) -> VertexOut {
+                let p = particles[iIdx];
+
+                // 3px box expansion
+                var off = vec2<f32>(0.0);
+                if (vIdx == 0u) { off = vec2<f32>(-1.0, -1.0); }
+                else if (vIdx == 1u) { off = vec2<f32>( 1.0, -1.0); }
+                else if (vIdx == 2u) { off = vec2<f32>(-1.0,  1.0); }
+                else if (vIdx == 3u) { off = vec2<f32>(-1.0,  1.0); }
+                else if (vIdx == 4u) { off = vec2<f32>( 1.0, -1.0); }
+                else if (vIdx == 5u) { off = vec2<f32>( 1.0,  1.0); }
+
+                let size = 3.0;
+                let worldPos = p.pos + off * size;
+
+                let ndcX = (worldPos.x / params.screen.x) * 2.0 - 1.0;
+                let ndcY = (1.0 - (worldPos.y / params.screen.y)) * 2.0 - 1.0;
+
+                var out : VertexOut;
+                out.pos = vec4<f32>(ndcX, ndcY, 0.0, 1.0);
+
+                // Color mapping
+                let speed = length(p.vel);
+                let t = smoothstep(0.0, 10.0, speed);
+                out.color = vec4<f32>(mix(vec3<f32>(0.3, 0.0, 0.5), vec3<f32>(0.5, 0.9, 1.0), t), 1.0);
+                return out;
+            }
+
+            @fragment
+            fn fs_main(@location(0) color : vec4<f32>) -> @location(0) vec4<f32> {
+                return color;
+            }
+        `;
+
+                    // ===========================================
+                    // 3. PIPELINES & LAYOUTS
+                    // ===========================================
+
+                    // Compute Layout: STORAGE (Read-Write)
+                    const computeBindGroupLayout = device.createBindGroupLayout(
+                        {
+                            entries: [
+                                {
+                                    binding: 0,
+                                    visibility: GPUShaderStage.COMPUTE,
+                                    buffer: { type: "storage" },
+                                },
+                                {
+                                    binding: 1,
+                                    visibility: GPUShaderStage.COMPUTE,
+                                    buffer: { type: "uniform" },
+                                },
+                            ],
+                        },
+                    );
+
+                    computeBindGroup = device.createBindGroup({
+                        layout: computeBindGroupLayout,
+                        entries: [
+                            {
+                                binding: 0,
+                                resource: { buffer: particleBuffer },
+                            },
+                            { binding: 1, resource: { buffer: uniformBuffer } },
+                        ],
+                    });
+
+                    const computeModule = device.createShaderModule({
+                        code: computeCode,
+                    });
+                    computePipeline = device.createComputePipeline({
+                        layout: device.createPipelineLayout({
+                            bindGroupLayouts: [computeBindGroupLayout],
+                        }),
+                        compute: { module: computeModule, entryPoint: "main" },
+                    });
+
+                    // Render Layout: READ-ONLY-STORAGE
+                    const renderBindGroupLayout = device.createBindGroupLayout({
+                        entries: [
+                            {
+                                binding: 0,
+                                visibility: GPUShaderStage.VERTEX,
+                                buffer: { type: "read-only-storage" },
+                            },
+                            {
+                                binding: 1,
+                                visibility: GPUShaderStage.VERTEX,
+                                buffer: { type: "uniform" },
+                            },
+                        ],
+                    });
+
+                    renderBindGroup = device.createBindGroup({
+                        layout: renderBindGroupLayout,
+                        entries: [
+                            {
+                                binding: 0,
+                                resource: { buffer: particleBuffer },
+                            },
+                            { binding: 1, resource: { buffer: uniformBuffer } },
+                        ],
+                    });
+
+                    const renderModule = device.createShaderModule({
+                        code: renderCode,
+                    });
+                    renderPipeline = device.createRenderPipeline({
+                        layout: device.createPipelineLayout({
+                            bindGroupLayouts: [renderBindGroupLayout],
+                        }),
+                        vertex: { module: renderModule, entryPoint: "vs_main" },
+                        fragment: {
+                            module: renderModule,
+                            entryPoint: "fs_main",
+                            targets: [
+                                {
+                                    format,
+                                    blend: {
+                                        color: {
+                                            srcFactor: "src-alpha",
+                                            dstFactor: "one",
+                                            operation: "add",
+                                        },
+                                        alpha: {
+                                            srcFactor: "zero",
+                                            dstFactor: "one",
+                                            operation: "add",
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                        primitive: { topology: "triangle-list" },
+                    });
+
+                    // ===========================================
+                    // 4. LOOP
+                    // ===========================================
+                    let time = 0;
+                    let frameCount = 0;
+                    let lastTime = performance.now();
+
+                    function frame() {
+                        time += 0.02;
+
+                        // FPS
+                        frameCount++;
+                        if (performance.now() - lastTime > 1000) {
+                            debugEl.innerText = `FPS: ${frameCount} | Particles: ${NUM_PARTICLES}`;
+                            frameCount = 0;
+                            lastTime = performance.now();
+                        }
+
+                        // Update Uniforms
+                        const uData = new Float32Array([
+                            mouse.x,
+                            mouse.y,
+                            0.4,
+                            time,
+                            canvas.width,
+                            canvas.height,
+                            0,
+                            0,
+                        ]);
+                        device.queue.writeBuffer(uniformBuffer, 0, uData);
+
+                        const commandEncoder = device.createCommandEncoder();
+
+                        // Compute Pass
+                        const cPass = commandEncoder.beginComputePass();
+                        cPass.setPipeline(computePipeline);
+                        cPass.setBindGroup(0, computeBindGroup);
+                        cPass.dispatchWorkgroups(Math.ceil(NUM_PARTICLES / 64));
+                        cPass.end();
+
+                        // Render Pass
+                        const rPass = commandEncoder.beginRenderPass({
+                            colorAttachments: [
+                                {
+                                    view: context
+                                        .getCurrentTexture()
+                                        .createView(),
+                                    clearValue: {
+                                        r: 0.05,
+                                        g: 0.05,
+                                        b: 0.08,
+                                        a: 1.0,
+                                    },
+                                    loadOp: "clear",
+                                    storeOp: "store",
+                                },
+                            ],
+                        });
+                        rPass.setPipeline(renderPipeline);
+                        rPass.setBindGroup(0, renderBindGroup); // Uses the Read-Only group
+                        rPass.draw(6, NUM_PARTICLES);
+                        rPass.end();
+
+                        device.queue.submit([commandEncoder.finish()]);
+                        requestAnimationFrame(frame);
+                    }
+                    requestAnimationFrame(frame);
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+
+            init();
+        </script>
+    </body>
+</html>

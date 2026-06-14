@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Claude Infinite Seamless Loop</title>
+        <style>
+            :root {
+                --bg-color: #faf9f5;
+                --text-color: #191919;
+                --subtitle-color: #66635e;
+            }
+
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
+            body {
+                background-color: var(--bg-color);
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    Helvetica, Arial, sans-serif;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                overflow: hidden;
+                position: relative;
+            }
+
+            .container {
+                text-align: center;
+                z-index: 10;
+                pointer-events: none;
+                position: absolute;
+                top: 10%;
+            }
+
+            h1 {
+                font-size: 2rem;
+                font-weight: 400;
+                color: var(--text-color);
+                letter-spacing: -0.02em;
+                margin-bottom: 0.4rem;
+            }
+
+            p {
+                font-size: 0.9rem;
+                color: var(--subtitle-color);
+            }
+
+            #canvas-container {
+                position: relative;
+                width: 100vw;
+                height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            canvas {
+                display: block;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Claude</h1>
+            <p>AI Constructing Infrastructure Loop</p>
+        </div>
+
+        <div id="canvas-container">
+            <canvas id="hero-canvas"></canvas>
+        </div>
+
+        <script>
+            // 1. 系统参数
+            const GRID_SIZE = 19;
+            const PALETTE = [
+                "#D97757",
+                "#E08B6E",
+                "#DD8263",
+                "#E29478",
+                "#D17A60",
+                "#E6A085",
+            ];
+            const AGENT_COLOR = "#D97757";
+            const GRID_DOT_COLOR = "#EAE8E2";
+
+            const STEP_DURATION = 150; // 生长每步时间 (ms)
+            const HOLD_DURATION = 1000; // 拼满后静止时间 (ms)
+            const ZOOM_DURATION = 1600; // 缩放过渡时间 (ms)
+
+            const CLAUDE_PATH =
+                "M54.375 118.75L56.125 111L58.125 101L59.75 93L61.25 83.125L62.125 79.875L62 79.625L61.375 79.75L53.875 90L42.5 105.375L33.5 114.875L31.375 115.75L27.625 113.875L28 110.375L30.125 107.375L42.5 91.5L50 81.625L54.875 76L54.75 75.25H54.5L21.5 96.75L15.625 97.5L13 95.125L13.375 91.25L14.625 90L24.5 83.125L49.125 69.375L49.5 68.125L49.125 67.5H47.875L43.75 67.25L29.75 66.875L17.625 66.375L5.75 65.75L2.75 65.125L0 61.375L0.25 59.5L2.75 57.875L6.375 58.125L14.25 58.75L26.125 59.5L34.75 60L47.5 61.375H49.5L49.75 60.5L49.125 60L48.625 59.5L36.25 51.25L23 42.5L16 37.375L12.25 34.75L10.375 32.375L9.625 27.125L13 23.375L17.625 23.75L18.75 24L23.375 27.625L33.25 35.25L46.25 44.875L48.125 46.375L49 45.875V45.5L48.125 44.125L41.125 31.375L33.625 18.375L30.25 13L29.375 9.75C29.0417 8.625 28.875 7.375 28.875 6L32.75 0.750006L34.875 0L40.125 0.750006L42.25 2.625L45.5 10L50.625 21.625L58.75 37.375L61.125 42.125L62.375 46.375L62.875 47.75H63.75V47L64.375 38L65.625 27.125L66.875 13.125L67.25 9.125L69.25 4.375L73.125 1.87501L76.125 3.25L78.625 6.875L78.25 9.125L76.875 18.75L73.875 33.875L72 44.125H73.125L74.375 42.75L79.5 36L88.125 25.25L91.875 21L96.375 16.25L99.25 14H104.625L108.5 19.875L106.75 26L101.25 33L96.625 38.875L90 47.75L86 54.875L86.375 55.375H87.25L102.125 52.125L110.25 50.75L119.75 49.125L124.125 51.125L124.625 53.125L122.875 57.375L112.625 59.875L100.625 62.25L82.75 66.5L82.5 66.625L82.75 75L90.75 67.75L94.25 68H102.75L118.5 69.125L122.625 71.875L125 75.125L124.625 77.75L118.25 80.875L109.75 78.875L89.75 74.125L83 72.5H82V73L87.75 78.625L98.125 88L111.25 100.125L111.875 103.125L110.25 105.625L108.5 105.375L97 96.625L92.5 92.75L82.5 84.375H81.875V85.25L84.125 88.625L96.375 107L97 112.625L96.125 114.375L92.875 115.5L89.5 114.875L82.25 104.875L74.875 93.5L68.875 83.375L68.25 83.875L64.625 121.625L63 123.5L59.25 125L56.125 122.625L54.375 118.75Z";
+            const CLAUDE_PATH_2D = new Path2D(CLAUDE_PATH);
+
+            const canvas = document.getElementById("hero-canvas");
+            const ctx = canvas.getContext("2d");
+
+            let dpr = window.devicePixelRatio || 1;
+            let width, height, centerVal, gridSpacing, cellSize, cellRadius;
+
+            let validGridPoints = [];
+            let validGridSet = new Set();
+            let adjacencyMap = new Map();
+            let centerCellIdx = 180;
+
+            let state = "growing"; // 'growing' | 'holding' | 'zooming'
+            let activeCells = new Set();
+            let cellColors = new Map();
+            let cellBirthTimes = new Map();
+            let agents = [];
+            let lastSimTime = 0;
+            let stateChangeTime = 0;
+
+            // 离屏渲染，用以精确网格化采样
+            function rasterizeSVG() {
+                const size = 152;
+                const offscreenCanvas = document.createElement("canvas");
+                offscreenCanvas.width = size;
+                offscreenCanvas.height = size;
+                const oCtx = offscreenCanvas.getContext("2d");
+
+                oCtx.save();
+                oCtx.translate(6, 6);
+                oCtx.scale(1.12, 1.12);
+                oCtx.fillStyle = "black";
+                oCtx.fill(CLAUDE_PATH_2D);
+                oCtx.restore();
+
+                const imgData = oCtx.getImageData(0, 0, size, size).data;
+                validGridPoints = [];
+                validGridSet.clear();
+
+                const cellPixelSize = size / GRID_SIZE;
+
+                for (let gy = 0; gy < GRID_SIZE; gy++) {
+                    for (let gx = 0; gx < GRID_SIZE; gx++) {
+                        let filledCount = 0;
+                        for (let py = 0; py < cellPixelSize; py++) {
+                            for (let px = 0; px < cellPixelSize; px++) {
+                                const x = Math.floor(gx * cellPixelSize + px);
+                                const y = Math.floor(gy * cellPixelSize + py);
+                                const alpha = imgData[(y * size + x) * 4 + 3];
+                                if (alpha > 50) filledCount++;
+                            }
+                        }
+                        if (
+                            filledCount >
+                            cellPixelSize * cellPixelSize * 0.15
+                        ) {
+                            const idx = gy * GRID_SIZE + gx;
+                            validGridPoints.push({ gx, gy, idx });
+                            validGridSet.add(idx);
+                            cellColors.set(
+                                idx,
+                                PALETTE[
+                                    Math.floor(Math.random() * PALETTE.length)
+                                ],
+                            );
+                        }
+                    }
+                }
+
+                adjacencyMap.clear();
+                const dirs = [
+                    [1, 0],
+                    [-1, 0],
+                    [0, 1],
+                    [0, -1],
+                ];
+                for (const cell of validGridPoints) {
+                    const neighbors = [];
+                    for (const [dx, dy] of dirs) {
+                        const nx = cell.gx + dx;
+                        const ny = cell.gy + dy;
+                        if (
+                            nx >= 0 &&
+                            nx < GRID_SIZE &&
+                            ny >= 0 &&
+                            ny < GRID_SIZE
+                        ) {
+                            const nidx = ny * GRID_SIZE + nx;
+                            if (validGridSet.has(nidx)) {
+                                neighbors.push(nidx);
+                            }
+                        }
+                    }
+                    adjacencyMap.set(cell.idx, neighbors);
+                }
+
+                let minDist = Infinity;
+                for (const cell of validGridPoints) {
+                    const dist = Math.hypot(cell.gx - 9, cell.gy - 9);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        centerCellIdx = cell.idx;
+                    }
+                }
+            }
+
+            function resize() {
+                width = window.innerWidth;
+                height = window.innerHeight;
+                canvas.width = width * dpr;
+                canvas.height = height * dpr;
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+                centerVal = Math.min(width * 0.58, height * 0.58);
+                gridSpacing = centerVal / GRID_SIZE;
+                cellSize = gridSpacing * 0.88;
+                cellRadius = cellSize * 0.25;
+            }
+
+            // 步进模拟核心
+            function stepSimulation(now) {
+                if (state !== "growing") return;
+
+                const occupied = new Set(agents.map((a) => a.idx));
+
+                for (const agent of agents) {
+                    const neighbors = adjacencyMap.get(agent.idx) || [];
+                    const validNeighbors = neighbors.filter(
+                        (n) => !activeCells.has(n) && !occupied.has(n),
+                    );
+
+                    if (validNeighbors.length > 0) {
+                        const targetIdx =
+                            validNeighbors[
+                                Math.floor(
+                                    Math.random() * validNeighbors.length,
+                                )
+                            ];
+                        occupied.add(targetIdx);
+
+                        activeCells.add(agent.idx);
+                        cellBirthTimes.set(agent.idx, now);
+
+                        agent.prevIdx = agent.idx;
+                        agent.idx = targetIdx;
+                        agent.progress = 0;
+                    } else {
+                        activeCells.add(agent.idx);
+                        cellBirthTimes.set(agent.idx, now);
+                        agent.dead = true;
+                    }
+                }
+
+                agents = agents.filter((a) => !a.dead);
+
+                // 边缘智能补充寻找新路径的代理 (Sparks)
+                const maxAgents = 5;
+                if (
+                    agents.length < maxAgents &&
+                    activeCells.size < validGridPoints.length
+                ) {
+                    const borderCells = [];
+                    for (const idx of activeCells) {
+                        const neighbors = adjacencyMap.get(idx) || [];
+                        const hasEmptyNeighbor = neighbors.some(
+                            (n) => !activeCells.has(n) && !occupied.has(n),
+                        );
+                        if (hasEmptyNeighbor) borderCells.push(idx);
+                    }
+
+                    if (borderCells.length > 0) {
+                        borderCells.sort(() => Math.random() - 0.5);
+                        const spawnCount = Math.min(
+                            maxAgents - agents.length,
+                            borderCells.length,
+                        );
+                        for (let i = 0; i < spawnCount; i++) {
+                            const spawnIdx = borderCells[i];
+                            const neighbors = adjacencyMap.get(spawnIdx) || [];
+                            const emptyNeighbors = neighbors.filter(
+                                (n) => !activeCells.has(n) && !occupied.has(n),
+                            );
+                            if (emptyNeighbors.length > 0) {
+                                const targetIdx =
+                                    emptyNeighbors[
+                                        Math.floor(
+                                            Math.random() *
+                                                emptyNeighbors.length,
+                                        )
+                                    ];
+                                occupied.add(targetIdx);
+                                agents.push({
+                                    idx: targetIdx,
+                                    prevIdx: spawnIdx,
+                                    progress: 0,
+                                    bornAt: now,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                if (
+                    activeCells.size === validGridPoints.length &&
+                    agents.length === 0
+                ) {
+                    state = "holding";
+                    stateChangeTime = now;
+                }
+            }
+
+            // 新周期无缝初始化，彻底消除启动闪烁
+            function startCycle(now) {
+                activeCells.clear();
+                cellBirthTimes.clear();
+
+                // 首帧直接激活种子，并记录起始时间
+                activeCells.add(centerCellIdx);
+                cellBirthTimes.set(centerCellIdx, now);
+
+                state = "growing";
+                agents = [
+                    {
+                        idx: centerCellIdx,
+                        prevIdx: centerCellIdx,
+                        progress: 0,
+                        bornAt: now,
+                    },
+                ];
+                lastSimTime = now;
+            }
+
+            // 矢量绘制：正在生成/退化中的元胞（Claude 梅花 Logo 态）
+            function drawClaudeLogoShape(ctx, x, y, size, color, scale) {
+                ctx.save();
+                ctx.translate(x + size / 2, y + size / 2);
+                const pathScale = (size / 125) * scale;
+                ctx.scale(pathScale, pathScale);
+                ctx.translate(-62.5, -62.5);
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.fill(CLAUDE_PATH_2D);
+                ctx.restore();
+            }
+
+            // 矢量绘制：生成后的稳定元胞（圆角矩形）
+            function drawRoundedRect(ctx, x, y, size, radius, color, scale) {
+                ctx.save();
+                ctx.translate(x + size / 2, y + size / 2);
+                ctx.scale(scale, scale);
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.roundRect(-size / 2, -size / 2, size, size, radius);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            function easeInOutCubic(t) {
+                return t < 0.5
+                    ? 4 * t * t * t
+                    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+            }
+
+            function easeOutCubic(t) {
+                return 1 - Math.pow(1 - t, 3);
+            }
+
+            // 主渲染引擎
+            function draw(now) {
+                ctx.clearRect(0, 0, width, height);
+
+                const cx = width / 2;
+                const cy = height / 2 + 20;
+
+                let cameraScale = 1.0;
+                let currentGridOpacity = 1.0;
+                let nextGridOpacity = 0.0;
+                let zoomProgress = 0.0;
+
+                if (state === "growing") {
+                    const dt = now - lastSimTime;
+                    for (const agent of agents) {
+                        agent.progress = Math.min(
+                            1,
+                            agent.progress + dt / STEP_DURATION,
+                        );
+                    }
+                    if (dt >= STEP_DURATION) {
+                        stepSimulation(now);
+                        lastSimTime = now;
+                    }
+                } else if (state === "holding") {
+                    if (now - stateChangeTime > HOLD_DURATION) {
+                        state = "zooming";
+                        stateChangeTime = now;
+                    }
+                } else if (state === "zooming") {
+                    const elapsed = now - stateChangeTime;
+                    zoomProgress = Math.min(1, elapsed / ZOOM_DURATION);
+                    const t = easeInOutCubic(zoomProgress);
+
+                    const targetScale = cellSize / (GRID_SIZE * gridSpacing);
+                    cameraScale = 1.0 + (targetScale - 1.0) * t;
+
+                    currentGridOpacity = Math.max(0, 1.0 - t * 1.5);
+                    nextGridOpacity = Math.max(0, (t - 0.4) / 0.6);
+
+                    if (zoomProgress >= 1.0) {
+                        startCycle(now);
+                        requestAnimationFrame(draw); // 修复核心：必须在 return 前重新激活渲染请求，防止循环断裂
+                        return;
+                    }
+                }
+
+                // 2. 绘制未来景深参考网格
+                if (state === "zooming") {
+                    ctx.save();
+                    ctx.globalAlpha = nextGridOpacity;
+                    for (let gy = 0; gy < GRID_SIZE; gy++) {
+                        for (let gx = 0; gx < GRID_SIZE; gx++) {
+                            const x = cx + (gx - 9) * gridSpacing;
+                            const y = cy + (gy - 9) * gridSpacing;
+                            ctx.fillStyle = GRID_DOT_COLOR;
+                            ctx.beginPath();
+                            ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+                    ctx.restore();
+                }
+
+                // 3. 绘制当前景深参考网格
+                ctx.save();
+                ctx.globalAlpha = currentGridOpacity;
+                for (let gy = 0; gy < GRID_SIZE; gy++) {
+                    for (let gx = 0; gx < GRID_SIZE; gx++) {
+                        const x = cx + (gx - 9) * gridSpacing * cameraScale;
+                        const y = cy + (gy - 9) * gridSpacing * cameraScale;
+                        ctx.fillStyle = GRID_DOT_COLOR;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 1.2 * cameraScale, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                ctx.restore();
+
+                // 4. 渲染核心元胞（成长中为梅花，成长后为稳定矩形，消散时反向退化为梅花形态）
+                const morphThreshold = 0.7 + zoomProgress * 0.3;
+
+                for (const cell of validGridPoints) {
+                    const gx = cell.gx;
+                    const gy = cell.gy;
+
+                    const x =
+                        cx +
+                        (gx - 9) * gridSpacing * cameraScale -
+                        (cellSize * cameraScale) / 2;
+                    const y =
+                        cy +
+                        (gy - 9) * gridSpacing * cameraScale -
+                        (cellSize * cameraScale) / 2;
+
+                    const hasCell = activeCells.has(cell.idx);
+                    const birthTime = cellBirthTimes.get(cell.idx);
+                    let scale = 0;
+
+                    if (hasCell && birthTime) {
+                        const t = Math.min(1, (now - birthTime) / 450);
+                        scale = easeOutCubic(t);
+                    }
+
+                    if (scale > 0) {
+                        const color = cellColors.get(cell.idx) || PALETTE[0];
+
+                        if (scale < morphThreshold) {
+                            const logoScale = Math.min(
+                                1,
+                                scale / morphThreshold,
+                            );
+                            drawClaudeLogoShape(
+                                ctx,
+                                x,
+                                y,
+                                cellSize * cameraScale,
+                                color,
+                                logoScale,
+                            );
+                        } else {
+                            drawRoundedRect(
+                                ctx,
+                                x,
+                                y,
+                                cellSize * cameraScale,
+                                cellRadius * cameraScale,
+                                color,
+                                scale,
+                            );
+                        }
+                    }
+                }
+
+                // 5. 绘制活跃的寻路代理 (Sparks 旋转能量体)
+                if (state === "growing") {
+                    for (const agent of agents) {
+                        const currX = agent.idx % GRID_SIZE;
+                        const currY = Math.floor(agent.idx / GRID_SIZE);
+                        const prevX = agent.prevIdx % GRID_SIZE;
+                        const prevY = Math.floor(agent.prevIdx / GRID_SIZE);
+
+                        const gx = prevX + (currX - prevX) * agent.progress;
+                        const gy = prevY + (currY - prevY) * agent.progress;
+
+                        const x = cx + (gx - 9) * gridSpacing;
+                        const y = cy + (gy - 9) * gridSpacing;
+
+                        ctx.save();
+                        ctx.shadowBlur = 15;
+                        ctx.shadowColor = AGENT_COLOR;
+
+                        const rotation = now * 0.004;
+                        ctx.translate(x, y);
+                        ctx.rotate(rotation);
+
+                        const size = cellSize * 1.1;
+                        ctx.scale(size / 125, size / 125);
+                        ctx.translate(-62.5, -62.5);
+                        ctx.fillStyle = "#FFFFFF";
+                        ctx.beginPath();
+                        ctx.fill(CLAUDE_PATH_2D);
+                        ctx.restore();
+                    }
+                }
+
+                requestAnimationFrame(draw);
+            }
+
+            window.addEventListener("resize", () => {
+                resize();
+            });
+
+            // 初始化运行
+            rasterizeSVG();
+            resize();
+            startCycle(performance.now());
+            requestAnimationFrame(draw);
+        </script>
+    </body>
+</html>

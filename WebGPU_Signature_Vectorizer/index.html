@@ -1,0 +1,1218 @@
+<!doctype html>
+<html lang="zh">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Signature Vectorizer Ultimate</title>
+        <style>
+            :root {
+                /* Catppuccin Mocha Theme */
+                --bg: #1e1e2e;
+                --surface: #313244;
+                --overlay: #45475a;
+                --text: #cdd6f4;
+                --accent: #cba6f7;
+                --accent-hover: #b4befe;
+                --green: #a6e3a1;
+                --red: #f38ba8;
+                --blue: #89b4fa;
+                --yellow: #f9e2af;
+            }
+
+            body {
+                font-family: "Segoe UI", system-ui, sans-serif;
+                background: var(--bg);
+                color: var(--text);
+                margin: 0;
+                padding: 20px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                min-height: 100vh;
+                user-select: none;
+            }
+
+            h1 {
+                font-weight: 800;
+                background: linear-gradient(135deg, var(--accent), var(--blue));
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 25px;
+                letter-spacing: -1px;
+            }
+
+            .layout {
+                display: grid;
+                grid-template-columns: 320px 1fr;
+                gap: 25px;
+                width: 100%;
+                max-width: 1400px;
+            }
+
+            @media (max-width: 900px) {
+                .layout {
+                    grid-template-columns: 1fr;
+                }
+            }
+
+            /* Sidebar Controls */
+            .controls {
+                background: var(--surface);
+                padding: 25px;
+                border-radius: 16px;
+                height: fit-content;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+                border: 1px solid rgba(255, 255, 255, 0.05);
+            }
+
+            .control-group {
+                margin-bottom: 20px;
+                transition: opacity 0.3s;
+            }
+
+            .control-group.disabled {
+                opacity: 0.3;
+                pointer-events: none;
+                display: none;
+            }
+
+            label {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 10px;
+                font-size: 0.9em;
+                font-weight: 600;
+                color: var(--accent-hover);
+            }
+
+            .val {
+                font-family: "Consolas", monospace;
+                color: var(--text);
+                opacity: 0.8;
+            }
+
+            input[type="range"] {
+                width: 100%;
+                accent-color: var(--accent);
+                cursor: pointer;
+                height: 6px;
+                background: var(--overlay);
+                border-radius: 3px;
+                -webkit-appearance: none;
+            }
+
+            input[type="range"]::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                width: 16px;
+                height: 16px;
+                background: var(--accent);
+                border-radius: 50%;
+                margin-top: -5px;
+            }
+
+            input[type="range"]::-webkit-slider-runnable-track {
+                height: 6px;
+                background: var(--overlay);
+                border-radius: 3px;
+            }
+
+            /* Mode Switcher */
+            .mode-switch {
+                display: flex;
+                background: var(--overlay);
+                padding: 4px;
+                border-radius: 8px;
+                margin-bottom: 20px;
+            }
+
+            .mode-btn {
+                flex: 1;
+                padding: 8px;
+                border: none;
+                background: transparent;
+                color: var(--text);
+                font-size: 0.9em;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 600;
+            }
+
+            .mode-btn.active {
+                background: var(--surface);
+                color: var(--accent);
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            }
+
+            /* Tool Grid */
+            .tool-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+
+            .tool-btn {
+                background: var(--overlay);
+                border: 2px solid transparent;
+                color: var(--text);
+                padding: 10px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 0.9em;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                transition: all 0.2s;
+            }
+
+            .tool-btn:hover {
+                background: var(--surface);
+                filter: brightness(1.2);
+            }
+
+            .tool-btn.active {
+                border-color: var(--yellow);
+                background: rgba(249, 226, 175, 0.1);
+                color: var(--yellow);
+                font-weight: bold;
+            }
+
+            /* Buttons */
+            .btn-group {
+                display: flex;
+                gap: 10px;
+                flex-direction: column;
+                margin-top: 20px;
+            }
+
+            button.action-btn {
+                width: 100%;
+                border: none;
+                padding: 14px;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 1rem;
+                cursor: pointer;
+                transition: all 0.2s;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+            }
+
+            #runBtn {
+                background: var(--accent);
+                color: var(--bg);
+            }
+            #clearBtn {
+                background: var(--red);
+                color: var(--bg);
+            }
+
+            .action-btn:hover {
+                filter: brightness(1.1);
+                transform: translateY(-2px);
+            }
+            .action-btn:disabled {
+                background: var(--overlay);
+                cursor: not-allowed;
+                transform: none;
+                filter: none;
+            }
+
+            #dlBtn {
+                background: var(--green);
+                color: var(--bg);
+                opacity: 0.5;
+                pointer-events: none;
+            }
+            #dlBtn.ready {
+                opacity: 1;
+                pointer-events: all;
+            }
+
+            /* Preview Area */
+            .preview-card {
+                background: var(--surface);
+                border-radius: 16px;
+                padding: 10px;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                height: calc(100vh - 100px);
+                min-height: 500px;
+            }
+
+            .tabs {
+                display: flex;
+                gap: 5px;
+                padding: 0 10px;
+            }
+            .tab {
+                padding: 10px 20px;
+                cursor: pointer;
+                color: var(--overlay);
+                font-weight: bold;
+                transition: 0.2s;
+                border-bottom: 2px solid transparent;
+            }
+            .tab.active {
+                color: var(--text);
+                border-bottom-color: var(--accent);
+            }
+
+            .canvas-wrapper {
+                flex: 1;
+                background-color: white;
+                background-image:
+                    linear-gradient(45deg, #eee 25%, transparent 25%),
+                    linear-gradient(-45deg, #eee 25%, transparent 25%),
+                    linear-gradient(45deg, transparent 75%, #eee 75%),
+                    linear-gradient(-45deg, transparent 75%, #eee 75%);
+                background-size: 20px 20px;
+                background-position:
+                    0 0,
+                    0 10px,
+                    10px -10px,
+                    -10px 0px;
+                border-radius: 8px;
+                overflow: hidden;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                position: relative;
+                touch-action: none;
+            }
+
+            canvas,
+            svg {
+                max-width: 100%;
+                max-height: 100%;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            }
+
+            #srcCanvas {
+                cursor: crosshair;
+            }
+
+            #status {
+                text-align: center;
+                font-size: 0.9em;
+                min-height: 20px;
+                margin-top: 10px;
+                color: var(--accent-hover);
+            }
+        </style>
+    </head>
+
+    <body>
+        <h1>WebGPU Signature Vectorizer</h1>
+
+        <div class="layout">
+            <aside class="controls">
+                <!-- Mode Switcher -->
+                <div class="mode-switch">
+                    <button
+                        class="mode-btn active"
+                        onclick="setAppMode('upload')"
+                    >
+                        🖼️ 图片上传
+                    </button>
+                    <button class="mode-btn" onclick="setAppMode('draw')">
+                        🎨 自由绘制
+                    </button>
+                </div>
+
+                <!-- Upload Only Controls -->
+                <div id="uploadGroup">
+                    <div class="control-group">
+                        <label>图片源 / Image Source</label>
+                        <input
+                            type="file"
+                            id="fileInput"
+                            accept="image/*"
+                            style="
+                                width: 100%;
+                                font-size: 0.9em;
+                                color: var(--text);
+                            "
+                        />
+                    </div>
+
+                    <div class="control-group">
+                        <label
+                            >边缘高阈值 / High
+                            <span id="hiVal" class="val">0.25</span></label
+                        >
+                        <input
+                            type="range"
+                            id="hiThreshold"
+                            min="0.1"
+                            max="0.6"
+                            step="0.01"
+                            value="0.25"
+                        />
+                    </div>
+
+                    <div class="control-group">
+                        <label
+                            >边缘低阈值 / Low
+                            <span id="loVal" class="val">0.10</span></label
+                        >
+                        <input
+                            type="range"
+                            id="loThreshold"
+                            min="0.05"
+                            max="0.3"
+                            step="0.01"
+                            value="0.10"
+                        />
+                    </div>
+
+                    <div class="control-group">
+                        <label
+                            >去噪级别 / Denoise
+                            <span id="noiseVal" class="val">15</span></label
+                        >
+                        <input
+                            type="range"
+                            id="minPathLen"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value="15"
+                        />
+                    </div>
+                </div>
+
+                <!-- Drawing Tools -->
+                <div
+                    id="drawToolsGroup"
+                    class="control-group disabled"
+                    style="display: none"
+                >
+                    <label>工具箱 / Toolkit</label>
+                    <div class="tool-grid">
+                        <button
+                            class="tool-btn active"
+                            onclick="setDrawTool('pen', this)"
+                        >
+                            ✏️ 签字笔
+                        </button>
+                        <button
+                            class="tool-btn"
+                            onclick="setDrawTool('line', this)"
+                        >
+                            📏 直尺
+                        </button>
+                        <button
+                            class="tool-btn"
+                            onclick="setDrawTool('circle', this)"
+                        >
+                            🧭 圆规
+                        </button>
+                        <button
+                            class="tool-btn"
+                            onclick="setDrawTool('triangle', this)"
+                        >
+                            📐 三角板
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Shared Controls -->
+                <div class="control-group">
+                    <label
+                        >曲线简化 / Simplify
+                        <span id="rdpVal" class="val">1.0</span></label
+                    >
+                    <input
+                        type="range"
+                        id="rdpEpsilon"
+                        min="0.2"
+                        max="5.0"
+                        step="0.1"
+                        value="1.0"
+                    />
+                </div>
+
+                <div class="btn-group">
+                    <button id="runBtn" class="action-btn">
+                        ⚡ 提取 (GPU)
+                    </button>
+                    <button
+                        id="clearBtn"
+                        class="action-btn"
+                        style="display: none"
+                    >
+                        🗑️ 清空画布
+                    </button>
+                    <button id="dlBtn" class="action-btn">💾 下载 SVG</button>
+                </div>
+                <div id="status">等待操作...</div>
+            </aside>
+
+            <main class="preview-card">
+                <div class="tabs">
+                    <div
+                        class="tab active"
+                        id="tabSvg"
+                        onclick="setViewMode('svg')"
+                    >
+                        矢量结果 (SVG)
+                    </div>
+                    <div class="tab" id="tabSrc" onclick="setViewMode('img')">
+                        画布 / 源图
+                    </div>
+                </div>
+                <div class="canvas-wrapper" id="canvasWrapper">
+                    <div
+                        id="svgContainer"
+                        style="
+                            width: 100%;
+                            height: 100%;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                        "
+                    ></div>
+                    <canvas id="srcCanvas" style="display: none"></canvas>
+                </div>
+            </main>
+        </div>
+
+        <!-- Shader: Gaussian Blur + Sobel Edge -->
+        <script type="x-shader/x-wgsl" id="computeShader">
+            struct Params {
+                width: u32,
+                height: u32,
+            };
+
+            @group(0) @binding(0) var inputTexture: texture_2d<f32>;
+            @group(0) @binding(1) var<storage, read_write> outputBuffer: array<f32>;
+            @group(0) @binding(2) var<uniform> params: Params;
+
+            fn getLum(c: vec4<f32>) -> f32 {
+                return dot(c.rgb, vec3<f32>(0.299, 0.587, 0.114));
+            }
+
+            fn sampleT(x: i32, y: i32) -> f32 {
+                let coords = vec2<i32>(
+                    clamp(x, 0, i32(params.width) - 1),
+                    clamp(y, 0, i32(params.height) - 1)
+                );
+                return getLum(textureLoad(inputTexture, coords, 0));
+            }
+
+            fn sampleBlur(x: i32, y: i32) -> f32 {
+                var s: f32 = 0.0;
+                s += sampleT(x-1,y-1); s += sampleT(x,y-1)*2.0; s += sampleT(x+1,y-1);
+                s += sampleT(x-1,y)*2.0; s += sampleT(x,y)*4.0; s += sampleT(x+1,y)*2.0;
+                s += sampleT(x-1,y+1); s += sampleT(x,y+1)*2.0; s += sampleT(x+1,y+1);
+                return s / 16.0;
+            }
+
+            @compute @workgroup_size(16, 16)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                let x = i32(id.x);
+                let y = i32(id.y);
+                let w = i32(params.width);
+                let h = i32(params.height);
+
+                if (x >= w || y >= h) { return; }
+
+                let tl = sampleBlur(x-1, y-1); let tm = sampleBlur(x, y-1); let tr = sampleBlur(x+1, y-1);
+                let ml = sampleBlur(x-1, y);                                let mr = sampleBlur(x+1, y);
+                let bl = sampleBlur(x-1, y+1); let bm = sampleBlur(x, y+1); let br = sampleBlur(x+1, y+1);
+
+                let gx = -tl + tr - 2.0*ml + 2.0*mr - bl + br;
+                let gy = -tl - 2.0*tm - tr + bl + 2.0*bm + br;
+
+                let mag = sqrt(gx*gx + gy*gy);
+                let idx = u32(y) * params.width + u32(x);
+                outputBuffer[idx] = mag;
+            }
+        </script>
+
+        <script>
+            // ================= UI State & Refs =================
+            const ui = {
+                file: document.getElementById("fileInput"),
+                runBtn: document.getElementById("runBtn"),
+                clearBtn: document.getElementById("clearBtn"),
+                dlBtn: document.getElementById("dlBtn"),
+                status: document.getElementById("status"),
+                svgBox: document.getElementById("svgContainer"),
+                cvs: document.getElementById("srcCanvas"),
+                canvasWrapper: document.getElementById("canvasWrapper"),
+                tabs: {
+                    svg: document.getElementById("tabSvg"),
+                    src: document.getElementById("tabSrc"),
+                },
+                inputs: {
+                    hi: document.getElementById("hiThreshold"),
+                    lo: document.getElementById("loThreshold"),
+                    noise: document.getElementById("minPathLen"),
+                    rdp: document.getElementById("rdpEpsilon"),
+                },
+                displays: {
+                    hi: document.getElementById("hiVal"),
+                    lo: document.getElementById("loVal"),
+                    noise: document.getElementById("noiseVal"),
+                    rdp: document.getElementById("rdpVal"),
+                },
+                uploadGroup: document.getElementById("uploadGroup"),
+                drawToolsGroup: document.getElementById("drawToolsGroup"),
+            };
+
+            let appMode = "upload"; // 'upload' | 'draw'
+            let drawTool = "pen"; // 'pen' | 'line' | 'circle' | 'triangle'
+            let gpuDevice = null;
+            let currentBitmap = null;
+            let canvasW = 800,
+                canvasH = 600;
+
+            // Drawing State
+            let isDrawing = false;
+            // Data Structure: Array of objects { points: [{x,y}...], isShape: boolean }
+            let drawnPaths = [];
+            let currentStroke = [];
+            let startPos = { x: 0, y: 0 };
+            let snapshot = null; // Canvas ImageData for shape preview
+
+            // ================= Initialization =================
+
+            Object.keys(ui.inputs).forEach((k) => {
+                ui.inputs[k].addEventListener("input", (e) => {
+                    ui.displays[k].innerText = e.target.value;
+                    if (appMode === "draw" && k === "rdp") {
+                        updateDrawingSVG();
+                    }
+                });
+            });
+
+            const ctx = ui.cvs.getContext("2d", { willReadFrequently: true });
+
+            function resetCanvas(w, h) {
+                canvasW = w;
+                canvasH = h;
+                ui.cvs.width = w;
+                ui.cvs.height = h;
+                ctx.fillStyle = "white";
+                ctx.fillRect(0, 0, w, h);
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = "black";
+            }
+            resetCanvas(800, 600);
+
+            // ================= Mode Switching =================
+
+            window.setAppMode = function (mode) {
+                appMode = mode;
+                document
+                    .querySelectorAll(".mode-btn")
+                    .forEach((b) => b.classList.remove("active"));
+                const btns = document.querySelectorAll(".mode-btn");
+                if (mode === "upload") btns[0].classList.add("active");
+                else btns[1].classList.add("active");
+
+                if (mode === "upload") {
+                    ui.uploadGroup.style.display = "block";
+                    ui.drawToolsGroup.style.display = "none";
+                    ui.drawToolsGroup.classList.add("disabled");
+
+                    ui.runBtn.style.display = "flex";
+                    ui.clearBtn.style.display = "none";
+                    ui.status.innerText = "模式: 图片上传 (GPU 处理)";
+                    setViewMode("img");
+                } else {
+                    ui.uploadGroup.style.display = "none";
+                    ui.drawToolsGroup.style.display = "block";
+                    setTimeout(
+                        () => ui.drawToolsGroup.classList.remove("disabled"),
+                        50,
+                    );
+
+                    ui.runBtn.style.display = "none";
+                    ui.clearBtn.style.display = "flex";
+                    ui.status.innerText = "模式: 自由绘制";
+
+                    drawnPaths = [];
+                    resetCanvas(
+                        ui.canvasWrapper.clientWidth,
+                        ui.canvasWrapper.clientHeight,
+                    );
+                    ui.svgBox.innerHTML = "";
+                    ui.dlBtn.classList.remove("ready");
+                    setViewMode("img");
+                }
+            };
+
+            window.setDrawTool = function (tool, btn) {
+                drawTool = tool;
+                document
+                    .querySelectorAll(".tool-btn")
+                    .forEach((b) => b.classList.remove("active"));
+                btn.classList.add("active");
+                ui.status.innerText = `当前工具: ${btn.innerText.split(" ")[1]}`;
+            };
+
+            window.setViewMode = function (mode) {
+                ui.tabs.svg.classList.toggle("active", mode === "svg");
+                ui.tabs.src.classList.toggle("active", mode === "img");
+
+                if (mode === "svg") {
+                    ui.svgBox.style.display = "flex";
+                    ui.cvs.style.display = "none";
+                } else {
+                    ui.svgBox.style.display = "none";
+                    ui.cvs.style.display = "block";
+                }
+            };
+
+            // ================= Drawing Logic (Pen + Shapes) =================
+
+            function getPos(e) {
+                const rect = ui.cvs.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+                const scaleX = ui.cvs.width / rect.width;
+                const scaleY = ui.cvs.height / rect.height;
+
+                return {
+                    x: (clientX - rect.left) * scaleX,
+                    y: (clientY - rect.top) * scaleY,
+                };
+            }
+
+            // --- Start Drawing ---
+            ["mousedown", "touchstart"].forEach((ev) => {
+                ui.cvs.addEventListener(
+                    ev,
+                    (e) => {
+                        if (appMode !== "draw") return;
+                        e.preventDefault();
+                        isDrawing = true;
+                        const p = getPos(e);
+                        startPos = p;
+                        currentStroke = [p]; // Always track stroke for touch fallback
+
+                        if (drawTool === "pen") {
+                            ctx.beginPath();
+                            ctx.moveTo(p.x, p.y);
+                        } else {
+                            // Save canvas state for shape preview
+                            snapshot = ctx.getImageData(
+                                0,
+                                0,
+                                ui.cvs.width,
+                                ui.cvs.height,
+                            );
+                        }
+                    },
+                    { passive: false },
+                );
+            });
+
+            // --- Move / Preview ---
+            ["mousemove", "touchmove"].forEach((ev) => {
+                ui.cvs.addEventListener(
+                    ev,
+                    (e) => {
+                        if (!isDrawing || appMode !== "draw") return;
+                        e.preventDefault();
+                        const p = getPos(e);
+                        currentStroke.push(p);
+
+                        if (drawTool === "pen") {
+                            ctx.lineTo(p.x, p.y);
+                            ctx.stroke();
+                        } else {
+                            // Restore snapshot to clear previous frame of the shape being dragged
+                            ctx.putImageData(snapshot, 0, 0);
+                            ctx.beginPath();
+
+                            if (drawTool === "line") {
+                                ctx.moveTo(startPos.x, startPos.y);
+                                ctx.lineTo(p.x, p.y);
+                            } else if (drawTool === "circle") {
+                                const r = Math.hypot(
+                                    p.x - startPos.x,
+                                    p.y - startPos.y,
+                                );
+                                ctx.arc(
+                                    startPos.x,
+                                    startPos.y,
+                                    r,
+                                    0,
+                                    Math.PI * 2,
+                                );
+                            } else if (drawTool === "triangle") {
+                                ctx.moveTo(startPos.x, startPos.y);
+                                ctx.lineTo(p.x, p.y);
+                                ctx.lineTo(startPos.x, p.y);
+                                ctx.closePath();
+                            }
+                            ctx.stroke();
+                        }
+                    },
+                    { passive: false },
+                );
+            });
+
+            // --- End / Commit (Bug Fix applied here) ---
+            ["mouseup", "mouseleave", "touchend"].forEach((ev) => {
+                ui.cvs.addEventListener(ev, (e) => {
+                    if (isDrawing && appMode === "draw") {
+                        isDrawing = false;
+
+                        if (drawTool === "pen") {
+                            if (currentStroke.length > 1) {
+                                drawnPaths.push({
+                                    points: currentStroke,
+                                    isShape: false,
+                                });
+                            }
+                        } else {
+                            // For shapes, we need end coordinates.
+                            // Mouseup gives coords, touchend does NOT.
+                            // Use last recorded stroke position for touch.
+                            let p;
+                            if (e.type === "touchend") {
+                                p =
+                                    currentStroke.length > 0
+                                        ? currentStroke[
+                                              currentStroke.length - 1
+                                          ]
+                                        : startPos;
+                            } else {
+                                p = getPos(e);
+                            }
+
+                            // Prevent zero-size shapes
+                            const dist = Math.hypot(
+                                p.x - startPos.x,
+                                p.y - startPos.y,
+                            );
+                            if (dist > 2) {
+                                generateShapeData(startPos, p);
+                            }
+                        }
+
+                        updateDrawingSVG();
+                    }
+                });
+            });
+
+            function generateShapeData(start, end) {
+                const points = [];
+                const steps = 72; // High resolution for circle
+
+                if (drawTool === "line") {
+                    points.push(start);
+                    points.push(end);
+                } else if (drawTool === "circle") {
+                    const r = Math.hypot(end.x - start.x, end.y - start.y);
+                    for (let i = 0; i <= steps; i++) {
+                        const theta = (i / steps) * Math.PI * 2;
+                        points.push({
+                            x: start.x + Math.cos(theta) * r,
+                            y: start.y + Math.sin(theta) * r,
+                        });
+                    }
+                } else if (drawTool === "triangle") {
+                    points.push(start);
+                    points.push(end);
+                    points.push({ x: start.x, y: end.y });
+                    points.push(start); // Close loop
+                }
+
+                if (points.length > 0) {
+                    drawnPaths.push({ points: points, isShape: true });
+                }
+            }
+
+            ui.clearBtn.addEventListener("click", () => {
+                drawnPaths = [];
+                resetCanvas(canvasW, canvasH);
+                ui.svgBox.innerHTML = "";
+                ui.dlBtn.classList.remove("ready");
+                ui.status.innerText = "画布已清空";
+            });
+
+            function updateDrawingSVG() {
+                if (drawnPaths.length === 0) return;
+                const epsilon = parseFloat(ui.inputs.rdp.value);
+                const svgContent = pathsToSVG(
+                    drawnPaths,
+                    canvasW,
+                    canvasH,
+                    epsilon,
+                );
+                ui.svgBox.innerHTML = svgContent;
+                ui.dlBtn.classList.add("ready");
+            }
+
+            // ================= Image Processing Logic (Upload Mode) =================
+
+            async function initGPU() {
+                if (!navigator.gpu) return false;
+                const adapter = await navigator.gpu.requestAdapter();
+                gpuDevice = await adapter.requestDevice();
+                return true;
+            }
+
+            ui.file.addEventListener("change", async (e) => {
+                if (appMode !== "upload") return;
+                const file = e.target.files[0];
+                if (!file) return;
+
+                ui.svgBox.innerHTML = "";
+                ui.dlBtn.classList.remove("ready");
+
+                currentBitmap = await createImageBitmap(file);
+                const MAX = 1600;
+                let w = currentBitmap.width;
+                let h = currentBitmap.height;
+
+                if (w > MAX || h > MAX) {
+                    const r = Math.min(MAX / w, MAX / h);
+                    w = Math.floor(w * r);
+                    h = Math.floor(h * r);
+                }
+
+                resetCanvas(w, h);
+                ctx.drawImage(currentBitmap, 0, 0, w, h);
+                ui.status.innerText = "图片已就绪";
+                setViewMode("img");
+            });
+
+            ui.runBtn.addEventListener("click", async () => {
+                if (!gpuDevice) await initGPU();
+                if (!gpuDevice) {
+                    alert("浏览器不支持 WebGPU");
+                    return;
+                }
+                if (!currentBitmap) {
+                    alert("请先上传图片");
+                    return;
+                }
+
+                ui.runBtn.disabled = true;
+                ui.status.innerText = "GPU: 计算梯度场...";
+
+                try {
+                    const magMap = await gpuComputeStep();
+
+                    requestAnimationFrame(() => {
+                        const rawPaths = cpuTraceStep(magMap);
+
+                        // Convert raw paths to structure compatible with SVG generator
+                        // Scanned paths are treated as "Pen" strokes (isShape: false) so they get smoothed
+                        const paths = rawPaths.map((p) => ({
+                            points: p,
+                            isShape: false,
+                        }));
+
+                        const epsilon = parseFloat(ui.inputs.rdp.value);
+                        const svgContent = pathsToSVG(
+                            paths,
+                            canvasW,
+                            canvasH,
+                            epsilon,
+                        );
+                        ui.svgBox.innerHTML = svgContent;
+
+                        ui.status.innerText = `完成! 提取 ${paths.length} 条路径`;
+                        ui.runBtn.disabled = false;
+                        ui.dlBtn.classList.add("ready");
+                        setViewMode("svg");
+                    });
+                } catch (e) {
+                    console.error(e);
+                    ui.status.innerText = "错误: " + e.message;
+                    ui.runBtn.disabled = false;
+                }
+            });
+
+            // ================= Core Algorithms (Renderer) =================
+
+            // Improved Renderer: Handles Shapes vs Strokes differently
+            function pathsToSVG(paths, w, h, epsilon) {
+                let d = "";
+
+                paths.forEach((item) => {
+                    let points = item.points;
+                    let isShape = item.isShape;
+
+                    if (isShape) {
+                        // --- Shape Mode: No RDP, No Smoothing, Exact Lines ---
+                        if (points.length < 2) return;
+                        d += `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)} `;
+                        for (let i = 1; i < points.length; i++) {
+                            d += `L ${points[i].x.toFixed(1)} ${points[i].y.toFixed(1)} `;
+                        }
+                    } else {
+                        // --- Pen/Scan Mode: RDP Simplify + Bezier Smooth ---
+                        const sim = rdp(points, epsilon);
+                        if (sim.length < 2) return;
+
+                        d += `M ${sim[0].x.toFixed(1)} ${sim[0].y.toFixed(1)} `;
+
+                        for (let i = 1; i < sim.length; i++) {
+                            if (i < sim.length - 1) {
+                                const p0 = sim[Math.max(i - 1, 0)];
+                                const p1 = sim[i];
+                                const p2 = sim[i + 1];
+                                const p3 = sim[Math.min(i + 2, sim.length - 1)];
+
+                                // Catmull-Rom to Cubic Bezier control points
+                                const cp1x = p1.x + (p2.x - p0.x) / 6;
+                                const cp1y = p1.y + (p2.y - p0.y) / 6;
+                                const cp2x = p2.x - (p3.x - p1.x) / 6;
+                                const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+                                d += `C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} `;
+                            } else {
+                                d += `L ${sim[i].x.toFixed(1)} ${sim[i].y.toFixed(1)} `;
+                            }
+                        }
+                    }
+                });
+
+                return `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" version="1.1" xmlns="http://www.w3.org/2000/svg">
+    <path d="${d}" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+            }
+
+            // WebGPU Compute
+            async function gpuComputeStep() {
+                const texture = gpuDevice.createTexture({
+                    size: [canvasW, canvasH],
+                    format: "rgba8unorm",
+                    usage:
+                        GPUTextureUsage.TEXTURE_BINDING |
+                        GPUTextureUsage.COPY_DST |
+                        GPUTextureUsage.RENDER_ATTACHMENT,
+                });
+                gpuDevice.queue.copyExternalImageToTexture(
+                    { source: ui.cvs },
+                    { texture },
+                    [canvasW, canvasH],
+                );
+
+                const bufSize = canvasW * canvasH * 4;
+                const outBuf = gpuDevice.createBuffer({
+                    size: bufSize,
+                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+                });
+                const uniBuf = gpuDevice.createBuffer({
+                    size: 16,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                });
+
+                const uArr = new Uint32Array([canvasW, canvasH, 0, 0]);
+                gpuDevice.queue.writeBuffer(uniBuf, 0, uArr);
+
+                const module = gpuDevice.createShaderModule({
+                    code: document.getElementById("computeShader").textContent,
+                });
+                const pipeline = gpuDevice.createComputePipeline({
+                    layout: "auto",
+                    compute: { module, entryPoint: "main" },
+                });
+
+                const bindGroup = gpuDevice.createBindGroup({
+                    layout: pipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: texture.createView() },
+                        { binding: 1, resource: { buffer: outBuf } },
+                        { binding: 2, resource: { buffer: uniBuf } },
+                    ],
+                });
+
+                const enc = gpuDevice.createCommandEncoder();
+                const pass = enc.beginComputePass();
+                pass.setPipeline(pipeline);
+                pass.setBindGroup(0, bindGroup);
+                pass.dispatchWorkgroups(
+                    Math.ceil(canvasW / 16),
+                    Math.ceil(canvasH / 16),
+                );
+                pass.end();
+
+                const readBuf = gpuDevice.createBuffer({
+                    size: bufSize,
+                    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+                });
+                enc.copyBufferToBuffer(outBuf, 0, readBuf, 0, bufSize);
+                gpuDevice.queue.submit([enc.finish()]);
+
+                await readBuf.mapAsync(GPUMapMode.READ);
+                const result = new Float32Array(
+                    readBuf.getMappedRange().slice(0),
+                );
+                readBuf.unmap();
+
+                outBuf.destroy();
+                uniBuf.destroy();
+                readBuf.destroy();
+                texture.destroy();
+                return result;
+            }
+
+            // CPU Tracing (Hysteresis + Path Following)
+            function cpuTraceStep(magMap) {
+                ui.status.innerText = "CPU: 路径追踪...";
+                const hi = parseFloat(ui.inputs.hi.value);
+                const lo = parseFloat(ui.inputs.lo.value);
+                const minLen = parseInt(ui.inputs.noise.value);
+
+                const edges = new Uint8Array(canvasW * canvasH);
+                const stack = [];
+
+                for (let i = 0; i < magMap.length; i++) {
+                    if (magMap[i] >= hi) {
+                        edges[i] = 2;
+                        stack.push(i);
+                    } else if (magMap[i] >= lo) {
+                        edges[i] = 1;
+                    }
+                }
+
+                while (stack.length) {
+                    const idx = stack.pop();
+                    const cx = idx % canvasW;
+                    const cy = (idx / canvasW) | 0;
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dx = -1; dx <= 1; dx++) {
+                            if (dx === 0 && dy === 0) continue;
+                            const nx = cx + dx,
+                                ny = cy + dy;
+                            if (
+                                nx >= 0 &&
+                                nx < canvasW &&
+                                ny >= 0 &&
+                                ny < canvasH
+                            ) {
+                                const nidx = ny * canvasW + nx;
+                                if (edges[nidx] === 1) {
+                                    edges[nidx] = 2;
+                                    stack.push(nidx);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                const traced = new Uint8Array(canvasW * canvasH);
+                const paths = [];
+
+                for (let i = 0; i < edges.length; i++) {
+                    if (edges[i] === 2 && !traced[i]) {
+                        const path = [];
+                        let curr = i;
+                        while (true) {
+                            path.push({
+                                x: curr % canvasW,
+                                y: (curr / canvasW) | 0,
+                            });
+                            traced[curr] = 1;
+
+                            let bestN = -1,
+                                maxVal = -1;
+                            const cx = curr % canvasW,
+                                cy = (curr / canvasW) | 0;
+
+                            for (let dy = -1; dy <= 1; dy++) {
+                                for (let dx = -1; dx <= 1; dx++) {
+                                    if (dx === 0 && dy === 0) continue;
+                                    const nx = cx + dx,
+                                        ny = cy + dy;
+                                    if (
+                                        nx >= 0 &&
+                                        nx < canvasW &&
+                                        ny >= 0 &&
+                                        ny < canvasH
+                                    ) {
+                                        const nidx = ny * canvasW + nx;
+                                        if (
+                                            edges[nidx] === 2 &&
+                                            !traced[nidx]
+                                        ) {
+                                            if (magMap[nidx] > maxVal) {
+                                                maxVal = magMap[nidx];
+                                                bestN = nidx;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (bestN !== -1) curr = bestN;
+                            else break;
+                        }
+                        if (path.length > minLen) paths.push(path);
+                    }
+                }
+                return paths;
+            }
+
+            // RDP Simplification
+            function rdp(points, epsilon) {
+                if (points.length <= 2) return points;
+                let dmax = 0,
+                    index = 0;
+                const end = points.length - 1;
+                for (let i = 1; i < end; i++) {
+                    const d = pLineDist(points[i], points[0], points[end]);
+                    if (d > dmax) {
+                        index = i;
+                        dmax = d;
+                    }
+                }
+                if (dmax > epsilon) {
+                    const res1 = rdp(points.slice(0, index + 1), epsilon);
+                    const res2 = rdp(points.slice(index), epsilon);
+                    return res1.slice(0, res1.length - 1).concat(res2);
+                }
+                return [points[0], points[end]];
+            }
+            function pLineDist(p, a, b) {
+                let area = Math.abs(
+                    0.5 *
+                        (a.x * b.y +
+                            b.x * p.y +
+                            p.x * a.y -
+                            b.x * a.y -
+                            p.x * b.y -
+                            a.x * p.y),
+                );
+                let len = Math.hypot(a.x - b.x, a.y - b.y);
+                return (area * 2) / (len === 0 ? 1 : len);
+            }
+
+            ui.dlBtn.addEventListener("click", () => {
+                const svgContent = ui.svgBox.innerHTML;
+                if (!svgContent) return;
+                const blob = new Blob([svgContent], {
+                    type: "image/svg+xml;charset=utf-8",
+                });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download =
+                    appMode === "draw"
+                        ? "signature-draw.svg"
+                        : "signature-scan.svg";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+        </script>
+    </body>
+</html>

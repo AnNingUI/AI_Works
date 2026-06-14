@@ -1,0 +1,1084 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>WebGPU SDF Studio (Fixed Font)</title>
+        <style>
+            /* === 基础样式 === */
+            body {
+                font-family: "Segoe UI", Consolas, sans-serif;
+                margin: 0;
+                background: #050505;
+                color: #eee;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+            }
+
+            /* === 顶部栏 === */
+            header {
+                padding: 10px 20px;
+                background: #111;
+                border-bottom: 1px solid #333;
+                flex-shrink: 0;
+                z-index: 10;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .header-top {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+
+            h1 {
+                margin: 0;
+                font-size: 16px;
+                font-weight: 600;
+                color: #00bcd4;
+                letter-spacing: 0.5px;
+            }
+
+            .controls-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px;
+                align-items: center;
+                font-size: 12px;
+            }
+
+            .group {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                background: #1a1a1a;
+                padding: 4px 8px;
+                border-radius: 4px;
+                border: 1px solid #333;
+            }
+
+            .group label {
+                color: #aaa;
+                font-weight: bold;
+            }
+
+            input[type="text"],
+            select {
+                background: #222;
+                border: 1px solid #444;
+                color: #fff;
+                padding: 4px 8px;
+                border-radius: 3px;
+                outline: none;
+            }
+
+            input[type="range"] {
+                width: 80px;
+                accent-color: #00bcd4;
+                cursor: pointer;
+            }
+
+            button {
+                background: #006064;
+                color: #fff;
+                cursor: pointer;
+                font-weight: bold;
+                border: none;
+                padding: 5px 12px;
+                border-radius: 4px;
+                transition: 0.2s;
+            }
+
+            button:hover {
+                background: #00838f;
+            }
+
+            button:disabled {
+                background: #333;
+                color: #555;
+                cursor: not-allowed;
+            }
+
+            /* === 主布局 === */
+            #main-layout {
+                flex: 1;
+                display: flex;
+                overflow: hidden;
+                position: relative;
+            }
+
+            /* 左侧：画布 */
+            #canvas-wrapper {
+                flex: 1;
+                position: relative;
+                background-image: radial-gradient(#1a1a1a 1px, transparent 1px);
+                background-size: 20px 20px;
+                overflow: hidden;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+
+            canvas {
+                box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
+            }
+
+            /* 右侧：编辑器 */
+            #editor-panel {
+                width: 450px;
+                background: #0e0e0e;
+                border-left: 1px solid #333;
+                display: flex;
+                flex-direction: column;
+                transition: transform 0.3s ease;
+            }
+
+            #editor-panel.hidden {
+                display: none;
+            }
+
+            .editor-header {
+                padding: 10px;
+                background: #161616;
+                border-bottom: 1px solid #333;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                font-size: 12px;
+                gap: 10px;
+            }
+
+            #PresetSelect {
+                flex: 1;
+                background: #222;
+                color: #ddd;
+                border: 1px solid #444;
+                font-size: 11px;
+            }
+
+            textarea {
+                flex: 1;
+                background: #0e0e0e;
+                color: #d4d4d4;
+                border: none;
+                padding: 10px;
+                font-family: "Consolas", "Monaco", monospace;
+                font-size: 13px;
+                line-height: 1.5;
+                resize: none;
+                outline: none;
+                white-space: pre;
+                overflow-x: auto;
+            }
+
+            #error-log {
+                max-height: 150px;
+                background: #2a0000;
+                color: #ff8080;
+                padding: 10px;
+                font-family: monospace;
+                font-size: 11px;
+                overflow-y: auto;
+                border-top: 1px solid #500;
+                display: none;
+            }
+
+            #error-log.visible {
+                display: block;
+            }
+
+            #status {
+                position: absolute;
+                bottom: 10px;
+                left: 10px;
+                background: rgba(0, 0, 0, 0.8);
+                padding: 5px 10px;
+                border-radius: 4px;
+                font-family: monospace;
+                font-size: 11px;
+                color: #00bcd4;
+                pointer-events: none;
+                border: 1px solid #00bcd4;
+            }
+
+            .toggle-switch {
+                position: relative;
+                display: inline-block;
+                width: 34px;
+                height: 18px;
+            }
+
+            .toggle-switch input {
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+
+            .slider {
+                position: absolute;
+                cursor: pointer;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background-color: #444;
+                transition: 0.4s;
+                border-radius: 34px;
+            }
+
+            .slider:before {
+                position: absolute;
+                content: "";
+                height: 12px;
+                width: 12px;
+                left: 3px;
+                bottom: 3px;
+                background-color: white;
+                transition: 0.4s;
+                border-radius: 50%;
+            }
+
+            input:checked + .slider {
+                background-color: #00bcd4;
+            }
+
+            input:checked + .slider:before {
+                transform: translateX(16px);
+            }
+        </style>
+    </head>
+
+    <body>
+        <header>
+            <div class="header-top">
+                <h1>WebGPU SDF Studio</h1>
+                <div style="display: flex; gap: 15px; align-items: center">
+                    <div class="group" style="border-color: #00bcd4">
+                        <label>自定义 Shader 模式</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="ModeToggle" />
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div id="status">System Ready</div>
+                </div>
+            </div>
+
+            <!-- 生成参数 -->
+            <div class="controls-row">
+                <div class="group">
+                    <label>T</label
+                    ><input
+                        id="TextInput"
+                        type="text"
+                        value="SDF"
+                        style="width: 60px"
+                    />
+                </div>
+                <div class="group">
+                    <select id="FontSelect">
+                        <option value="Arial Black" selected>
+                            Arial Black
+                        </option>
+                        <option value="Georgia">Georgia (Serif)</option>
+                        <option value="Courier New">Courier New (Mono)</option>
+                        <option value="Verdana">Verdana</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Comic Sans MS">Comic Sans</option>
+                    </select>
+                </div>
+                <div class="group">
+                    <select id="ResSelect">
+                        <option value="512">512px</option>
+                        <option value="1024" selected>1024px</option>
+                        <option value="2048">2K</option>
+                        <option value="4096">4K</option>
+                    </select>
+                </div>
+                <button id="GenBtn">强制刷新</button>
+            </div>
+
+            <!-- 标准渲染参数 -->
+            <div class="controls-row" id="std-controls">
+                <div class="group">
+                    <label>Thresh</label
+                    ><input
+                        id="ParamThreshold"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value="0.5"
+                    />
+                </div>
+                <div class="group">
+                    <label>Soft</label
+                    ><input
+                        id="ParamSoftness"
+                        type="range"
+                        min="0"
+                        max="20"
+                        step="0.1"
+                        value="1.0"
+                    />
+                </div>
+                <div class="group">
+                    <label>Glow</label
+                    ><input
+                        id="ParamGlowS"
+                        type="range"
+                        min="0"
+                        max="3"
+                        step="0.1"
+                        value="1.2"
+                    />
+                </div>
+                <div class="group">
+                    <label>Zoom</label
+                    ><input
+                        id="ZoomRange"
+                        type="range"
+                        min="0.1"
+                        max="5.0"
+                        step="0.1"
+                        value="1.0"
+                    />
+                </div>
+            </div>
+        </header>
+
+        <div id="main-layout">
+            <div id="canvas-wrapper">
+                <canvas id="GpuCanvas"></canvas>
+            </div>
+
+            <div id="editor-panel" class="hidden">
+                <div class="editor-header">
+                    <select id="PresetSelect">
+                        <option value="wave" selected>
+                            🌊 Preset: Dynamic Wave
+                        </option>
+                        <option value="metal">
+                            🛡️ Preset: Sharp Metal (AA)
+                        </option>
+                        <option value="md3">
+                            🎨 Preset: Material Design 3
+                        </option>
+                        <option value="apple">
+                            🍎 Preset: Apple HIG Glass
+                        </option>
+                    </select>
+                    <button
+                        id="CompileBtn"
+                        style="background: #2ea043; font-size: 11px"
+                    >
+                        应用 (Compile)
+                    </button>
+                </div>
+                <textarea id="WgslEditor" spellcheck="false"></textarea>
+                <div id="error-log"></div>
+            </div>
+        </div>
+
+        <!-- WGSL: JFA Core -->
+        <script id="wgsl-jfa" type="x-shader/x-wgsl">
+            @group(0) @binding(0) var inputTex : texture_2d<f32>;
+            @group(0) @binding(1) var outputTex : texture_storage_2d<rgba16float, write>;
+            @group(0) @binding(2) var<uniform> params : JfaParams;
+            struct JfaParams { stepWidth : i32, isSeed : i32 };
+
+            @compute @workgroup_size(8, 8)
+            fn main(@builtin(global_invocation_id) id : vec3<u32>) {
+              let size = textureDimensions(outputTex);
+              let pos = vec2<i32>(id.xy);
+              if (pos.x >= i32(size.x) || pos.y >= i32(size.y)) { return; }
+
+              if (params.isSeed == 1) {
+                if (textureLoad(inputTex, pos, 0).r > 0.5) {
+                  textureStore(outputTex, pos, vec4<f32>(f32(pos.x), f32(pos.y), 0.0, 1.0));
+                } else { textureStore(outputTex, pos, vec4<f32>(-1.0)); }
+                return;
+              }
+
+              var bestDist = 3.4e38; var bestCoord = vec2<f32>(-1.0);
+              let myPos = vec2<f32>(f32(pos.x), f32(pos.y));
+
+              for(var y=-1;y<=1;y++){ for(var x=-1;x<=1;x++){
+                let nPos = pos + vec2<i32>(x, y) * params.stepWidth;
+                if(nPos.x>=0 && nPos.y>=0 && u32(nPos.x)<size.x && u32(nPos.y)<size.y) {
+                  let seed = textureLoad(inputTex, nPos, 0).xy;
+                  if(seed.x >= 0.0) {
+                    let d = dot(seed-myPos, seed-myPos);
+                    if(d < bestDist) { bestDist = d; bestCoord = seed; }
+                  }
+                }
+              }}
+              textureStore(outputTex, pos, vec4<f32>(bestCoord, 0.0, 1.0));
+            }
+        </script>
+
+        <!-- WGSL: Render -->
+        <script id="wgsl-render-std" type="x-shader/x-wgsl">
+            struct VSOut { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> };
+            struct Uniforms { thresh: f32, soft: f32, glowR: f32, glowS: f32, size: f32, time: f32, w: f32, h: f32 };
+            @group(0) @binding(0) var<uniform> u : Uniforms;
+            @group(0) @binding(1) var sdf : texture_2d<f32>;
+
+            @vertex fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
+              var p = array<vec2<f32>,6>(vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(-1.,1.),vec2(1.,-1.),vec2(1.,1.));
+              return VSOut(vec4(p[i],0.,1.), vec2(p[i].x*0.5+0.5, 1.-(p[i].y*0.5+0.5)));
+            }
+
+            @fragment fn fs_main(v: VSOut) -> @location(0) vec4<f32> {
+              let coord = vec2<i32>(v.uv * u.size);
+              let seed = textureLoad(sdf, coord, 0).xy;
+              if (seed.x < 0.0) { return vec4(0.); }
+
+              let dist = distance(v.uv * u.size, seed);
+              let alpha = 1.0 - smoothstep(u.thresh, u.thresh + u.soft, dist);
+              let glow = exp(-dist * u.glowR) * u.glowS;
+
+              let col = vec3(0.9, 1.0, 1.0) * alpha + vec3(0., 0.7, 1.) * glow;
+              return vec4(col, max(alpha, glow));
+            }
+        </script>
+
+        <!-- JS Logic -->
+        <script>
+            const SHADER_PRESETS = {
+                wave: `
+fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+    let p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+@fragment
+fn fs_main(v: VSOut) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(uniforms.w, uniforms.h);
+    let wave = sin(v.uv.y * 10.0 + uniforms.time * 2.0) * 0.02;
+    let distUV = vec2<f32>(v.uv.x + wave, v.uv.y);
+    let coord = vec2<i32>(distUV * size);
+    if (coord.x < 0 || coord.x >= i32(size.x)) { return vec4(0.0); }
+    let seed = textureLoad(sdfTex, coord, 0).xy;
+    if (seed.x < 0.0) { return vec4(0.0); }
+    let dist = distance(distUV * size, seed);
+    let alpha = 1.0 - smoothstep(0.0, 2.0, dist);
+    let hue = v.uv.x * 0.5 + uniforms.time * 0.2;
+    return vec4(hsv2rgb(vec3(hue, 0.8, 1.0)) * alpha, alpha);
+}
+`,
+                metal: `
+@fragment
+fn fs_main(v: VSOut) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(uniforms.w, uniforms.h);
+    let coord = vec2<i32>(v.uv * size);
+    let seed = textureLoad(sdfTex, coord, 0).xy;
+    let isValid = seed.x >= 0.0;
+    let dist = distance(v.uv * size, seed);
+
+    // AA
+    let aaWidth = fwidth(dist);
+    let alpha = clamp(0.5 - (dist - 1.0) / max(aaWidth, 0.001), 0.0, 1.0);
+
+    // Normal
+    let ddx = dpdx(dist);
+    let ddy = dpdy(dist);
+    let normal = normalize(vec3<f32>(-ddx, -ddy, 0.5));
+
+    // Light
+    let lightDir = normalize(vec3<f32>(sin(uniforms.time), -0.5, 1.0));
+    let diff = max(dot(normal, lightDir), 0.0);
+    let viewDir = vec3<f32>(0.0, 0.0, 1.0);
+    let reflectDir = reflect(-lightDir, normal);
+    let spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+    let glow = vec3(0.0, 0.8, 1.0) * pow(1.0 - abs(dot(normal, viewDir)), 3.0);
+
+    let col = vec3(0.2, 0.2, 0.25) + vec3(0.8)*diff + vec3(1.0)*spec + glow;
+
+    if (!isValid) { return vec4(0.0); }
+    return vec4(col, alpha);
+}
+`,
+                md3: `
+// Material Design 3 风格
+// 特点：动态色调、柔和阴影(Elevation)、表面质感
+@fragment
+fn fs_main(v: VSOut) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(uniforms.w, uniforms.h);
+
+    // 1. 基础 SDF 采样
+    let coord = vec2<i32>(v.uv * size);
+    let seed = textureLoad(sdfTex, coord, 0).xy;
+    let dist = distance(v.uv * size, seed);
+    let isValid = seed.x >= 0.0;
+
+    // 2. 模拟阴影 (Elevation) - 通过偏移 UV 采样 SDF
+    // MD3 的阴影通常由两层组成：环境光遮蔽(Ambient)和关键光阴影(Key)
+    let shadowOffset = vec2<f32>(4.0, 6.0); // 阴影偏移量
+    let shadowCoord = vec2<i32>((v.uv * size) - shadowOffset);
+    var shadowDist = 100.0;
+    if (shadowCoord.x >= 0 && shadowCoord.y >= 0) {
+        let sSeed = textureLoad(sdfTex, shadowCoord, 0).xy;
+        if (sSeed.x >= 0.0) {
+            shadowDist = distance((v.uv * size) - shadowOffset, sSeed);
+        }
+    }
+    // 阴影柔和度计算
+    let shadowAlpha = (1.0 - smoothstep(0.0, 15.0, shadowDist)) * 0.4;
+
+    // 3. 主体形状 (Shape)
+    // 稍微向外扩张一点 (dilate)，让字体看起来更饱满 (Bold)
+    let shapeAlpha = 1.0 - smoothstep(0.0, 1.5, dist - 1.5);
+
+    // 4. 动态颜色系统 (Dynamic Color)
+    // 基于时间和 UV 生成 MD3 风格的 "Tertiary" 和 "Primary" 渐变
+    let t = uniforms.time * 0.5;
+    let colorA = vec3<f32>(0.8, 0.9, 1.0); // Surface Tint (浅蓝)
+    let colorB = vec3<f32>(0.4, 0.35, 0.95); // Primary (深紫)
+    let colorC = vec3<f32>(0.98, 0.85, 0.95); // Tertiary Container (粉)
+
+    // 混合因子
+    let mixVal = sin(v.uv.x * 2.0 + t) * 0.5 + 0.5;
+    let fillCol = mix(colorB, colorC, mixVal);
+
+    // 5. 表面光泽 (State Layer)
+    // 模拟轻微的表面高光
+    let highlight = smoothstep(0.4, 0.6, sin(v.uv.y * 10.0 - t * 2.0)) * 0.05;
+
+    let finalColor = fillCol + highlight;
+
+    // 组合：阴影在后，物体在前
+    // 注意：这里是单次绘制，所以我们手动混合阴影和主体
+
+    var outCol = vec3<f32>(0.0);
+    var outAlpha = 0.0;
+
+    if (shapeAlpha > 0.01) {
+        outCol = finalColor;
+        outAlpha = shapeAlpha;
+    } else {
+        outCol = vec3(0.0, 0.0, 0.0); // 阴影颜色
+        outAlpha = shadowAlpha;
+    }
+
+    // 简单的 Alpha 混合以处理边缘
+    return vec4(outCol, outAlpha);
+}
+`,
+                apple: `
+// Apple HIG 风格
+// 特点：磨砂玻璃、极细描边、纯净的渐变、漫反射光晕
+@fragment
+fn fs_main(v: VSOut) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(uniforms.w, uniforms.h);
+    let coord = vec2<i32>(v.uv * size);
+    let seed = textureLoad(sdfTex, coord, 0).xy;
+    let dist = distance(v.uv * size, seed);
+    let isValid = seed.x >= 0.0;
+
+    // --- 核心计算 ---
+    // 1. 极细描边 (Stroke)
+    // 在 SDF 距离 0 附近切出一个 1px 宽的边缘
+    let aa = fwidth(dist);
+    let strokeWidth = 1.5;
+    let borderMask = 1.0 - smoothstep(strokeWidth - aa, strokeWidth + aa, abs(dist));
+
+    // 2. 主体填充 (Fill)
+    // 稍微收缩一点，使得描边看起来是包在里面的
+    let fillMask = 1.0 - smoothstep(0.0, aa, dist);
+
+    // 3. 玻璃质感渐变 (Glass Gradient)
+    // 苹果风格通常是从上到下的微妙白色渐变
+    let grad = mix(vec3(1.0), vec3(0.9, 0.95, 1.0), v.uv.y);
+
+    // 4. 内部漫射光 (Inner Glow / Frost)
+    // 模拟光线穿过玻璃散射，距离边缘越近越亮
+    let innerGlow = exp(-dist * 0.15) * 0.6;
+
+    // 5. 外部发光 (Outer Glow / Diffuse Shadow)
+    // Apple 风格的阴影非常弥散，且带有颜色（通常是蓝色或原色）
+    let outerGlow = exp(-dist * 0.08) * vec3(0.0, 0.4, 1.0) * 0.5;
+
+    // --- 组合材质 ---
+
+    // 边框颜色：纯亮白，带一点透明度
+    let borderColor = vec3(1.0);
+
+    // 填充颜色：白色渐变 + 内部光晕
+    let bodyColor = grad + vec3(innerGlow);
+
+    var finalRgb = vec3(0.0);
+    var finalAlpha = 0.0;
+
+    // 混合逻辑：
+    // 如果在填充区
+    if (dist <= 0.0) {
+        // 内部：填充色 + 边框 (SDF 负值区域)
+        finalRgb = bodyColor;
+        finalAlpha = fillMask;
+    } else {
+        // 外部：边框 + 外发光
+        finalRgb = borderColor * borderMask + outerGlow;
+        finalAlpha = max(borderMask, length(outerGlow)); // 简单的透明度近似
+    }
+
+    // 稍微增加一点对比度
+    finalRgb = pow(finalRgb, vec3(1.1));
+
+    // Apple 风格的高级感来自于高亮边框叠加在柔和背景上
+    // 我们可以强调一下边框的亮度
+    if (borderMask > 0.1) {
+       finalRgb += vec3(0.2);
+    }
+
+    return vec4(finalRgb, clamp(finalAlpha, 0.0, 1.0));
+}
+`,
+            };
+
+            (async () => {
+                const state = {
+                    device: null,
+                    context: null,
+                    sdfTexture: null,
+                    jfaPipeline: null,
+                    jfaBindLayout: null,
+                    stdPipeline: null,
+                    stdBindLayout: null,
+                    customPipeline: null,
+                    uniformBuffer: null,
+                    renderBindGroup: null,
+                    isRendering: false,
+                    size: 1024,
+                    startTime: performance.now(),
+                    mode: "std",
+                };
+                const els = {
+                    canvas: document.getElementById("GpuCanvas"),
+                    status: document.getElementById("status"),
+                    editorPanel: document.getElementById("editor-panel"),
+                    editor: document.getElementById("WgslEditor"),
+                    errLog: document.getElementById("error-log"),
+                    modeToggle: document.getElementById("ModeToggle"),
+                    compileBtn: document.getElementById("CompileBtn"),
+                    presetSelect: document.getElementById("PresetSelect"),
+                    stdControls: document.getElementById("std-controls"),
+                    btn: document.getElementById("GenBtn"),
+                    res: document.getElementById("ResSelect"),
+                    zoom: document.getElementById("ZoomRange"),
+                    pThresh: document.getElementById("ParamThreshold"),
+                    pSoft: document.getElementById("ParamSoftness"),
+                    pGlowS: document.getElementById("ParamGlowS"),
+                    fontSel: document.getElementById("FontSelect"),
+                    textIn: document.getElementById("TextInput"),
+                };
+
+                els.editor.value = SHADER_PRESETS["wave"];
+                if (!navigator.gpu) {
+                    alert("WebGPU not supported");
+                    return;
+                }
+                const adapter = await navigator.gpu.requestAdapter({
+                    powerPreference: "high-performance",
+                });
+                if (!adapter) return;
+                if (adapter.limits.maxTextureDimension2D < 4096)
+                    document.querySelector('option[value="4096"]').disabled =
+                        true;
+
+                state.device = await adapter.requestDevice();
+                state.context = els.canvas.getContext("webgpu");
+                const format = navigator.gpu.getPreferredCanvasFormat();
+                const resize = () => {
+                    els.canvas.width = 1024;
+                    els.canvas.height = 1024;
+                    state.context.configure({
+                        device: state.device,
+                        format,
+                        alphaMode: "premultiplied",
+                    });
+                };
+                resize();
+
+                state.uniformBuffer = state.device.createBuffer({
+                    size: 64,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                });
+                const jfaModule = state.device.createShaderModule({
+                    code: document.getElementById("wgsl-jfa").text,
+                });
+                state.jfaBindLayout = state.device.createBindGroupLayout({
+                    entries: [
+                        {
+                            binding: 0,
+                            visibility: GPUShaderStage.COMPUTE,
+                            texture: { sampleType: "unfilterable-float" },
+                        },
+                        {
+                            binding: 1,
+                            visibility: GPUShaderStage.COMPUTE,
+                            storageTexture: {
+                                access: "write-only",
+                                format: "rgba16float",
+                            },
+                        },
+                        {
+                            binding: 2,
+                            visibility: GPUShaderStage.COMPUTE,
+                            buffer: { type: "uniform" },
+                        },
+                    ],
+                });
+                state.jfaPipeline = state.device.createComputePipeline({
+                    layout: state.device.createPipelineLayout({
+                        bindGroupLayouts: [state.jfaBindLayout],
+                    }),
+                    compute: { module: jfaModule, entryPoint: "main" },
+                });
+                state.stdBindLayout = state.device.createBindGroupLayout({
+                    entries: [
+                        {
+                            binding: 0,
+                            visibility:
+                                GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                            buffer: { type: "uniform" },
+                        },
+                        {
+                            binding: 1,
+                            visibility: GPUShaderStage.FRAGMENT,
+                            texture: { sampleType: "unfilterable-float" },
+                        },
+                    ],
+                });
+                const stdModule = state.device.createShaderModule({
+                    code: document.getElementById("wgsl-render-std").text,
+                });
+                state.stdPipeline = state.device.createRenderPipeline({
+                    layout: state.device.createPipelineLayout({
+                        bindGroupLayouts: [state.stdBindLayout],
+                    }),
+                    vertex: { module: stdModule, entryPoint: "vs_main" },
+                    fragment: {
+                        module: stdModule,
+                        entryPoint: "fs_main",
+                        targets: [
+                            {
+                                format,
+                                blend: {
+                                    color: {
+                                        srcFactor: "one",
+                                        dstFactor: "one-minus-src-alpha",
+                                    },
+                                    alpha: {
+                                        srcFactor: "one",
+                                        dstFactor: "one-minus-src-alpha",
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                    primitive: { topology: "triangle-list" },
+                });
+
+                async function compileCustomShader() {
+                    const userCode = els.editor.value;
+                    els.errLog.classList.remove("visible");
+                    els.errLog.innerHTML = "";
+                    els.compileBtn.disabled = true;
+                    const fullShader = `struct VSOut{@builtin(position)p:vec4<f32>,@location(0)uv:vec2<f32>};struct Uniforms{thresh:f32,soft:f32,glowR:f32,glowS:f32,size:f32,time:f32,w:f32,h:f32};@group(0) @binding(0) var<uniform> uniforms:Uniforms;@group(0) @binding(1) var sdfTex:texture_2d<f32>;@vertex fn vs_main(@builtin(vertex_index) i:u32)->VSOut{var p=array<vec2<f32>,6>(vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(-1.,1.),vec2(1.,-1.),vec2(1.,1.));return VSOut(vec4(p[i],0.,1.),vec2(p[i].x*0.5+0.5,1.-(p[i].y*0.5+0.5)));}\n${userCode}`;
+                    state.device.pushErrorScope("validation");
+                    const module = state.device.createShaderModule({
+                        code: fullShader,
+                    });
+                    const info = await module.getCompilationInfo();
+                    if (info.messages.length > 0) {
+                        let hasError = false;
+                        info.messages.forEach((msg) => {
+                            if (msg.type === "error") hasError = true;
+                            const div = document.createElement("div");
+                            div.textContent = `[${msg.type}] Line ${Math.max(0, msg.lineNum - 5)}: ${msg.message}`;
+                            div.style.color =
+                                msg.type === "error" ? "#ff8080" : "#ffff80";
+                            els.errLog.appendChild(div);
+                        });
+                        if (hasError) {
+                            els.errLog.classList.add("visible");
+                            els.compileBtn.disabled = false;
+                            state.device.popErrorScope();
+                            return false;
+                        }
+                    }
+                    try {
+                        state.customPipeline =
+                            state.device.createRenderPipeline({
+                                layout: state.device.createPipelineLayout({
+                                    bindGroupLayouts: [state.stdBindLayout],
+                                }),
+                                vertex: { module, entryPoint: "vs_main" },
+                                fragment: {
+                                    module,
+                                    entryPoint: "fs_main",
+                                    targets: [
+                                        {
+                                            format,
+                                            blend: {
+                                                color: {
+                                                    srcFactor: "one",
+                                                    dstFactor:
+                                                        "one-minus-src-alpha",
+                                                },
+                                                alpha: {
+                                                    srcFactor: "one",
+                                                    dstFactor:
+                                                        "one-minus-src-alpha",
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                                primitive: { topology: "triangle-list" },
+                            });
+                        els.compileBtn.disabled = false;
+                    } catch (e) {
+                        console.error(e);
+                    } finally {
+                        state.device.popErrorScope();
+                    }
+                    return true;
+                }
+
+                async function generateSDF() {
+                    els.btn.disabled = true;
+                    els.status.textContent = "Generating...";
+                    const size = parseInt(els.res.value);
+                    state.size = size;
+                    const offCanvas = document.createElement("canvas");
+                    offCanvas.width = size;
+                    offCanvas.height = size;
+                    const ctx = offCanvas.getContext("2d");
+                    ctx.fillStyle = "black";
+                    ctx.fillRect(0, 0, size, size);
+
+                    // Font setup (Fixed quotes and listener trigger)
+                    let fontSize = size * 0.7;
+                    const fontName = els.fontSel.value;
+                    const text = els.textIn.value;
+                    // Using quotes for compatibility with spaces (e.g., "Arial Black")
+                    ctx.font = `bold ${fontSize}px "${fontName}"`;
+
+                    const textW = ctx.measureText(text).width;
+                    if (textW > size * 0.85) fontSize *= (size * 0.85) / textW;
+                    ctx.font = `bold ${fontSize}px "${fontName}"`;
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillStyle = "white";
+                    ctx.fillText(text, size / 2, size / 2);
+
+                    const imgData = ctx.getImageData(0, 0, size, size);
+                    const inputTex = state.device.createTexture({
+                        size: [size, size, 1],
+                        format: "rgba8unorm",
+                        usage:
+                            GPUTextureUsage.TEXTURE_BINDING |
+                            GPUTextureUsage.COPY_DST,
+                    });
+                    state.device.queue.writeTexture(
+                        { texture: inputTex },
+                        imgData.data,
+                        { bytesPerRow: size * 4, rowsPerImage: size },
+                        [size, size, 1],
+                    );
+
+                    const texDesc = {
+                        size: [size, size, 1],
+                        format: "rgba16float",
+                        usage:
+                            GPUTextureUsage.TEXTURE_BINDING |
+                            GPUTextureUsage.STORAGE_BINDING |
+                            GPUTextureUsage.COPY_DST,
+                    };
+                    let texA = state.device.createTexture(texDesc);
+                    let texB = state.device.createTexture(texDesc);
+                    const encoder = state.device.createCommandEncoder();
+                    const seedBuf = state.device.createBuffer({
+                        size: 16,
+                        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                    });
+                    state.device.queue.writeBuffer(
+                        seedBuf,
+                        0,
+                        new Int32Array([0, 1]),
+                    );
+                    const pass1 = encoder.beginComputePass();
+                    pass1.setPipeline(state.jfaPipeline);
+                    pass1.setBindGroup(
+                        0,
+                        state.device.createBindGroup({
+                            layout: state.jfaBindLayout,
+                            entries: [
+                                { binding: 0, resource: inputTex.createView() },
+                                { binding: 1, resource: texA.createView() },
+                                { binding: 2, resource: { buffer: seedBuf } },
+                            ],
+                        }),
+                    );
+                    pass1.dispatchWorkgroups(
+                        Math.ceil(size / 8),
+                        Math.ceil(size / 8),
+                    );
+                    pass1.end();
+
+                    let step = size / 2;
+                    let inT = texA,
+                        outT = texB;
+                    while (step >= 1) {
+                        const stepBuf = state.device.createBuffer({
+                            size: 16,
+                            usage: GPUBufferUsage.UNIFORM,
+                            mappedAtCreation: true,
+                        });
+                        new Int32Array(stepBuf.getMappedRange()).set([step, 0]);
+                        stepBuf.unmap();
+                        const pass = encoder.beginComputePass();
+                        pass.setPipeline(state.jfaPipeline);
+                        pass.setBindGroup(
+                            0,
+                            state.device.createBindGroup({
+                                layout: state.jfaBindLayout,
+                                entries: [
+                                    { binding: 0, resource: inT.createView() },
+                                    { binding: 1, resource: outT.createView() },
+                                    {
+                                        binding: 2,
+                                        resource: { buffer: stepBuf },
+                                    },
+                                ],
+                            }),
+                        );
+                        pass.dispatchWorkgroups(
+                            Math.ceil(size / 8),
+                            Math.ceil(size / 8),
+                        );
+                        pass.end();
+                        [inT, outT] = [outT, inT];
+                        step /= 2;
+                    }
+                    state.sdfTexture = inT;
+                    state.device.queue.submit([encoder.finish()]);
+                    await state.device.queue.onSubmittedWorkDone();
+                    els.status.textContent = `SDF Ready (${size}x${size}) - ${fontName}`;
+                    els.btn.disabled = false;
+                    state.renderBindGroup = state.device.createBindGroup({
+                        layout: state.stdBindLayout,
+                        entries: [
+                            {
+                                binding: 0,
+                                resource: { buffer: state.uniformBuffer },
+                            },
+                            {
+                                binding: 1,
+                                resource: state.sdfTexture.createView(),
+                            },
+                        ],
+                    });
+                    state.isRendering = true;
+                    requestAnimationFrame(renderLoop);
+                }
+
+                function renderLoop() {
+                    if (!state.isRendering || !state.renderBindGroup) return;
+                    const time = (performance.now() - state.startTime) / 1000.0;
+                    state.device.queue.writeBuffer(
+                        state.uniformBuffer,
+                        0,
+                        new Float32Array([
+                            parseFloat(els.pThresh.value),
+                            parseFloat(els.pSoft.value),
+                            0.03,
+                            parseFloat(els.pGlowS.value),
+                            state.size,
+                            time,
+                            state.size,
+                            state.size,
+                        ]),
+                    );
+                    const encoder = state.device.createCommandEncoder();
+                    const pass = encoder.beginRenderPass({
+                        colorAttachments: [
+                            {
+                                view: state.context
+                                    .getCurrentTexture()
+                                    .createView(),
+                                clearValue: { r: 0.02, g: 0.02, b: 0.02, a: 1 },
+                                loadOp: "clear",
+                                storeOp: "store",
+                            },
+                        ],
+                    });
+                    pass.setPipeline(
+                        state.mode === "custom" && state.customPipeline
+                            ? state.customPipeline
+                            : state.stdPipeline,
+                    );
+                    pass.setBindGroup(0, state.renderBindGroup);
+                    const drawSize = 1024 * parseFloat(els.zoom.value) * 0.8;
+                    pass.setViewport(
+                        (1024 - drawSize) / 2,
+                        (1024 - drawSize) / 2,
+                        drawSize,
+                        drawSize,
+                        0,
+                        1,
+                    );
+                    pass.draw(6);
+                    pass.end();
+                    state.device.queue.submit([encoder.finish()]);
+                    requestAnimationFrame(renderLoop);
+                }
+
+                // === 事件绑定 ===
+                els.btn.onclick = generateSDF;
+                els.compileBtn.onclick = compileCustomShader;
+                els.modeToggle.onchange = async () => {
+                    state.mode = els.modeToggle.checked ? "custom" : "std";
+                    els.editorPanel.classList.toggle(
+                        "hidden",
+                        !els.modeToggle.checked,
+                    );
+                    els.stdControls.style.opacity = els.modeToggle.checked
+                        ? "0.3"
+                        : "1";
+                    if (state.mode === "custom" && !state.customPipeline)
+                        await compileCustomShader();
+                };
+                els.presetSelect.onchange = async (e) => {
+                    if (SHADER_PRESETS[e.target.value]) {
+                        els.editor.value = SHADER_PRESETS[e.target.value];
+                        if (state.mode === "custom")
+                            await compileCustomShader();
+                    }
+                };
+                [els.pThresh, els.pSoft, els.pGlowS, els.zoom].forEach(
+                    (el) =>
+                        (el.oninput = () => {
+                            if (!state.isRendering) {
+                                state.isRendering = true;
+                                renderLoop();
+                            }
+                        }),
+                );
+
+                // === 修复的核心：让生成参数也能自动触发 ===
+                els.fontSel.onchange = generateSDF; // 切换字体立即刷新
+                els.res.onchange = generateSDF; // 切换分辨率立即刷新
+                els.textIn.onchange = generateSDF; // 文本框回车或失焦后刷新
+
+                setTimeout(generateSDF, 100);
+            })();
+        </script>
+    </body>
+</html>

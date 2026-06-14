@@ -1,0 +1,947 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <title>《Galaxy's Eye》 Shader</title>
+        <style>
+            html,
+            body {
+                margin: 0;
+                width: 100%;
+                height: 100%;
+                overflow: hidden;
+                background: #000;
+            }
+            canvas {
+                width: 100%;
+                height: 100%;
+                display: block;
+            }
+            #audio-prompt {
+                position: absolute;
+                top: 25px;
+                left: 50%;
+                transform: translateX(-50%);
+                color: rgba(255, 255, 255, 0.4);
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    sans-serif;
+                font-size: 11px;
+                letter-spacing: 4px;
+                pointer-events: none;
+                transition: opacity 1.2s ease;
+                z-index: 10;
+                text-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+            }
+        </style>
+    </head>
+    <body>
+        <div id="audio-prompt">点击屏幕开启空间合成电声</div>
+        <canvas id="gpu"></canvas>
+
+        <script type="module">
+            const canvas = document.getElementById("gpu");
+
+            if (!navigator.gpu) {
+                document.body.innerHTML = "<h1>WebGPU Not Supported</h1>";
+                throw new Error("WebGPU not supported");
+            }
+
+            const adapter = await navigator.gpu.requestAdapter();
+            const device = await adapter.requestDevice();
+            const context = canvas.getContext("webgpu");
+            const format = navigator.gpu.getPreferredCanvasFormat();
+
+            // --- 1. 预计算 Mipmap 银河纹理 ---
+            function createGalaxyTextureWithMips(device) {
+                const size = 1024;
+                const canvas2D = document.createElement("canvas");
+                canvas2D.width = size;
+                canvas2D.height = size;
+                const ctx = canvas2D.getContext("2d");
+
+                ctx.fillStyle = "#010006";
+                ctx.fillRect(0, 0, size, size);
+
+                const nebGrad = ctx.createRadialGradient(
+                    size / 2,
+                    size / 2,
+                    50,
+                    size / 2,
+                    size / 2,
+                    size * 0.45,
+                );
+                nebGrad.addColorStop(0, "rgba(225, 55, 175, 0.45)");
+                nebGrad.addColorStop(0.3, "rgba(65, 15, 155, 0.25)");
+                nebGrad.addColorStop(0.6, "rgba(8, 4, 40, 0.1)");
+                nebGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+                ctx.fillStyle = nebGrad;
+                ctx.fillRect(0, 0, size, size);
+
+                const numArms = 2;
+                for (let i = 0; i < 8000; i++) {
+                    const r = Math.pow(Math.random(), 1.6) * (size * 0.45);
+                    const theta =
+                        r * 0.015 +
+                        (i % numArms) * Math.PI +
+                        (Math.random() - 0.5) * 0.45;
+                    const x = size / 2 + r * Math.cos(theta);
+                    const y = size / 2 + r * Math.sin(theta);
+                    const starSize = Math.random() * 1.5 + 0.3;
+                    ctx.fillStyle = `rgba(${160 + Math.floor(Math.random() * 95)}, ${180 + Math.floor(Math.random() * 75)}, 255, ${Math.random() * 0.8 + 0.2})`;
+                    ctx.beginPath();
+                    ctx.arc(x, y, starSize, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                const coreGrad = ctx.createRadialGradient(
+                    size / 2,
+                    size / 2,
+                    0,
+                    size / 2,
+                    size / 2,
+                    55,
+                );
+                coreGrad.addColorStop(0, "rgba(255, 255, 255, 1.0)");
+                coreGrad.addColorStop(0.3, "rgba(255, 195, 255, 0.8)");
+                coreGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+                ctx.fillStyle = coreGrad;
+                ctx.beginPath();
+                ctx.arc(size / 2, size / 2, 55, 0, Math.PI * 2);
+                ctx.fill();
+
+                const mipLevelCount = Math.floor(Math.log2(size)) + 1;
+
+                // 修正：追加 GPUTextureUsage.RENDER_ATTACHMENT 解决 Dawn 引擎外部图像拷贝报错
+                const texture = device.createTexture({
+                    size: [size, size, 1],
+                    mipLevelCount,
+                    format: "rgba8unorm",
+                    usage:
+                        GPUTextureUsage.TEXTURE_BINDING |
+                        GPUTextureUsage.COPY_DST |
+                        GPUTextureUsage.RENDER_ATTACHMENT,
+                });
+
+                for (let i = 0; i < mipLevelCount; i++) {
+                    const mipSize = size >> i;
+                    const mipCanvas = document.createElement("canvas");
+                    mipCanvas.width = mipSize;
+                    mipCanvas.height = mipSize;
+                    const mipCtx = mipCanvas.getContext("2d");
+                    mipCtx.drawImage(
+                        canvas2D,
+                        0,
+                        0,
+                        size,
+                        size,
+                        0,
+                        0,
+                        mipSize,
+                        mipSize,
+                    );
+
+                    device.queue.copyExternalImageToTexture(
+                        { source: mipCanvas, flipY: true },
+                        { texture: texture, mipLevel: i },
+                        [mipSize, mipSize],
+                    );
+                }
+
+                return texture;
+            }
+
+            const galaxyTexture = createGalaxyTextureWithMips(device);
+
+            // --- 2. 动态中间纹理与反馈 Ping-Pong 纹理声明 ---
+            let hdrTexture = null;
+            let hdrTextureView = null;
+            let feedbackTexA = null;
+            let feedbackTexB = null;
+            let feedbackViewA = null;
+            let feedbackViewB = null;
+
+            // --- 3. 统一全局静态管线与绑定声明（防 GC 抖动） ---
+            const uniformBuffer = device.createBuffer({
+                size: 32,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+
+            const linearSampler = device.createSampler({
+                magFilter: "linear",
+                minFilter: "linear",
+                mipmapFilter: "linear",
+            });
+
+            let scenePipeline, feedbackPipeline, postPipeline;
+            let sceneBindGroup;
+            let feedbackBindGroupA, feedbackBindGroupB;
+            let postBindGroupA, postBindGroupB;
+
+            // --- 4. 场景（Scene）管线代码 (补充 curlNoise 定义并修正体积云) ---
+            const sceneShaderSource = `
+struct Uniforms {
+    resolution : vec2f,
+    mouse : vec2f,
+    time : f32,
+    pad : f32,
+};
+
+@group(0) @binding(0) var<uniform> u : Uniforms;
+@group(0) @binding(1) var tGalaxy : texture_2d<f32>;
+@group(0) @binding(2) var sGalaxy : sampler;
+
+fn hash(p: vec2f) -> f32 {
+    return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453123);
+}
+
+fn noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let a = hash(i);
+    let b = hash(i + vec2f(1.0, 0.0));
+    let c = hash(i + vec2f(0.0, 1.0));
+    let d = hash(i + vec2f(1.0, 1.0));
+    let u2 = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u2.x), mix(c, d, u2.x), u2.y);
+}
+
+fn fbm(p0: vec2f) -> f32 {
+    var p = p0;
+    var v = 0.0;
+    var a = 0.5;
+    for(var i = 0; i < 4; i = i + 1) {
+        v += noise(p) * a;
+        p *= 2.0;
+        a *= 0.5;
+    }
+    return v;
+}
+
+// 补充定义：主场景着色器内缺失的 curlNoise 函数
+fn curlNoise(p: vec2f) -> vec2f {
+    let e = 0.01;
+    let dx = fbm(p + vec2f(e, 0.0)) - fbm(p - vec2f(e, 0.0));
+    let dy = fbm(p + vec2f(0.0, e)) - fbm(p - vec2f(0.0, e));
+    return vec2f(dy, -dx) / e;
+}
+
+// 模拟三维标量场用于体积云采样
+fn noise3D(p: vec3f) -> f32 {
+    let xy = noise(p.xy);
+    let yz = noise(p.yz);
+    return mix(xy, yz, sin(p.z * 0.5) * 0.5 + 0.5);
+}
+
+fn fbm3D(p: vec3f) -> f32 {
+    var pos = p;
+    var v = 0.0;
+    var a = 0.5;
+    for(var i = 0; i < 3; i = i + 1) {
+        v += noise3D(pos) * a;
+        pos *= 2.1;
+        a *= 0.5;
+    }
+    return v;
+}
+
+// 轻量级 16 步物理体积云步进（Volumetric Raymarching）
+fn raymarchClouds(ro: vec3f, rd: vec3f, t: f32) -> vec3f {
+    var depth = 0.0;
+    var accumulatedColor = vec3f(0.0);
+    var transmittance = 1.0;
+    let stepSize = 0.07;
+
+    for(var i: i32 = 0; i < 16; i = i + 1) {
+        let p = ro + rd * depth;
+        // 动态位移与 3D 体积场密度
+        let density = max(0.0, fbm3D(p * 1.6 + vec3f(t * 0.1, -t * 0.05, t * 0.02)) - 0.38) * 0.7;
+
+        if (density > 0.005) {
+            // 体积光吸收自遮挡近似
+            let shadowDist = 0.05;
+            let lightDensity = fbm3D((p + vec3f(0.0, shadowDist, 0.0)) * 1.6);
+            let shadow = exp(-lightDensity * 3.5);
+
+            let colorSample = mix(vec3f(0.12, 0.05, 0.35), vec3f(0.9, 0.2, 0.7), shadow);
+            accumulatedColor += colorSample * density * transmittance * stepSize;
+            transmittance *= clamp(1.0 - density * stepSize * 2.5, 0.0, 1.0);
+        }
+        depth += stepSize;
+        if (transmittance < 0.02) { break; }
+    }
+    return accumulatedColor;
+}
+
+fn metaball(p: vec2f, center: vec2f, radius: f32) -> f32 {
+    let d = distance(p, center);
+    return (radius * radius) / (d * d + 0.0001);
+}
+
+fn metaballField(p: vec2f, t: f32, aspect: f32) -> f32 {
+    var centers : array<vec2f, 8>;
+    centers[0] = vec2f(0.5 * aspect, 0.5) + vec2f(sin(t * 0.8) * 0.20, cos(t * 0.6) * 0.12);
+    centers[1] = vec2f(0.5 * aspect, 0.5) + vec2f(cos(t * 0.5) * 0.22, sin(t * 0.7) * 0.16);
+    centers[2] = vec2f(0.5 * aspect, 0.5) + vec2f(sin(t * 1.1) * -0.18, cos(t * 0.9) * -0.1);
+    centers[3] = vec2f(0.5 * aspect, 0.5) + vec2f(cos(t * 1.3) * -0.22, sin(t * 0.4) * 0.18);
+    centers[4] = vec2f(0.5 * aspect, 0.5) + vec2f(sin(t * 0.9) * 0.12, cos(t * 1.2) * -0.16);
+    centers[5] = vec2f(0.5 * aspect, 0.5) + vec2f(cos(t * 0.75) * 0.15, sin(t * 0.65) * -0.14);
+    centers[6] = vec2f(0.5 * aspect, 0.5) + vec2f(sin(t * 1.4) * -0.12, cos(t * 0.85) * 0.12);
+    centers[7] = vec2f(0.5 * aspect, 0.5) + vec2f(cos(t * 0.45) * 0.16, sin(t * 1.15) * 0.1);
+
+    var field = 0.0;
+    field += metaball(p, centers[0], 0.13);
+    field += metaball(p, centers[1], 0.11);
+    field += metaball(p, centers[2], 0.09);
+    field += metaball(p, centers[3], 0.10);
+    field += metaball(p, centers[4], 0.08);
+    field += metaball(p, centers[5], 0.12);
+    field += metaball(p, centers[6], 0.07);
+    field += metaball(p, centers[7], 0.11);
+
+    let evolution = fbm(p * 8.0 + vec2f(0.0, t * 1.5)) * 0.18;
+    return field + evolution;
+}
+
+@vertex
+fn vsMain(@builtin(vertex_index) v: u32) -> @builtin(position) vec4f {
+    var pos = array<vec2f, 6>(
+        vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+        vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0)
+    );
+    return vec4f(pos[v], 0.0, 1.0);
+}
+
+@fragment
+fn fsMain(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+    let uv = frag.xy / u.resolution;
+    let aspect = u.resolution.x / u.resolution.y;
+
+    var p = uv;
+    p.x *= aspect;
+
+    let t = u.time * 0.4;
+
+    // 鼠标畸变引力场
+    let mouse = vec2f(u.mouse.x * aspect, u.mouse.y);
+    let mouseDist = distance(p, mouse);
+    let gravity = normalize(p - mouse) * exp(-mouseDist * 6.0) * 0.09;
+    p += gravity;
+
+    // 分层视差星空
+    let starPosFar  = p * 550.0 + vec2f(t * 0.03, t * 0.01);
+    let starPosMid  = p * 300.0 - vec2f(t * 0.06, t * 0.02);
+    let starPosNear = p * 120.0 + vec2f(t * 0.15, -t * 0.05);
+
+    let starsFar  = pow(noise(starPosFar), 42.0) * 0.6;
+    let starsMid  = pow(noise(starPosMid), 32.0) * 0.9;
+    let starsNear = pow(noise(starPosNear), 20.0) * 1.3;
+    let starField = vec3f(starsFar + starsMid + starsNear);
+
+    // 三维步进体积云层 (通过 Raymarch 建立厚度感)
+    let ro = vec3f(p, -1.0);
+    let rd = normalize(vec3f(0.0, 0.0, 1.0));
+    let volumetricNebula = raymarchClouds(ro, rd, t);
+
+    let field = metaballField(p, t, aspect);
+
+    let eps = 0.007;
+    let fx = metaballField(p + vec2f(eps, 0.0), t, aspect) - metaballField(p - vec2f(eps, 0.0), t, aspect);
+    let fy = metaballField(p + vec2f(0.0, eps), t, aspect) - metaballField(p - vec2f(0.0, eps), t, aspect);
+    let normal = normalize(vec2f(fx, fy) + 1e-5);
+
+    var galaxyUv = p;
+    galaxyUv.x /= aspect;
+
+    // 显式添加 vec2f 强转，避免 WGSL 类型检查错误
+    let cloudCurl = curlNoise(p * 2.0 + vec2f(t * 0.05)) * 0.08;
+    let cloud1 = fbm(p * 1.1 + vec2f(t * 0.03, 0.0) + cloudCurl);
+    let cloud2 = fbm(p * 2.5 - vec2f(t * 0.01, t * 0.02) + cloudCurl);
+    let fgClouds = mix(vec3f(0.01, 0.0, 0.04), vec3f(0.14, 0.05, 0.32), cloud1) + vec3f(0.06, 0.08, 0.22) * cloud2;
+
+    // 五通道色散
+    let refractionStrength = smoothstep(0.9, 1.4, field) * 0.065;
+    let weights = array<vec3f, 5>(
+        vec3f(0.42, 0.00, 0.00), vec3f(0.28, 0.28, 0.00), vec3f(0.00, 0.45, 0.00),
+        vec3f(0.00, 0.25, 0.25), vec3f(0.00, 0.00, 0.58)
+    );
+    let offsets = array<f32, 5>(-1.4, -0.7, 0.0, 0.7, 1.4);
+
+    var refractedGalaxy = vec3f(0.0);
+    for(var i: i32 = 0; i < 5; i = i + 1) {
+        let tapUv = galaxyUv + normal * refractionStrength * offsets[i];
+        refractedGalaxy += textureSample(tGalaxy, sGalaxy, tapUv).rgb * weights[i];
+    }
+
+    // 次表面散射
+    let sssZone = smoothstep(0.85, 1.15, field) * (1.0 - smoothstep(1.15, 1.45, field));
+    let sssColor = vec3f(0.95, 0.38, 0.12) * sssZone * 2.5;
+
+    let edgeGlowMask = smoothstep(0.8, 1.0, field) * (1.0 - smoothstep(1.0, 1.25, field));
+    let edgeGlow = vec3f(0.1, 0.45, 1.1) * edgeGlowMask * 3.5;
+
+    let blobMask = smoothstep(1.0, 1.15, field);
+
+    var finalColor = fgClouds + volumetricNebula + starField * (1.0 - smoothstep(0.4, 1.1, field));
+    finalColor = mix(finalColor, refractedGalaxy + sssColor, blobMask);
+    finalColor += edgeGlow;
+
+    return vec4f(finalColor, 1.0);
+}
+`;
+
+            // --- 5. 反馈流体平流（Feedback Advection）管线代码 (强类型修正版) ---
+            const feedbackShaderSource = `
+struct Uniforms {
+    resolution : vec2f,
+    mouse : vec2f,
+    time : f32,
+    pad : f32,
+};
+
+@group(0) @binding(0) var<uniform> u : Uniforms;
+@group(0) @binding(1) var tScene : texture_2d<f32>;
+@group(0) @binding(2) var tPrev : texture_2d<f32>;
+@group(0) @binding(3) var sLinear : sampler;
+
+fn hash(p: vec2f) -> f32 {
+    return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453123);
+}
+
+fn noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let a = hash(i);
+    let b = hash(i + vec2f(1.0, 0.0));
+    let c = hash(i + vec2f(0.0, 1.0));
+    let d = hash(i + vec2f(1.0, 1.0));
+    let u2 = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u2.x), mix(c, d, u2.x), u2.y);
+}
+
+fn fbm(p0: vec2f) -> f32 {
+    var p = p0;
+    var v = 0.0;
+    var a = 0.5;
+    for(var i = 0; i < 4; i = i + 1) {
+        v += noise(p) * a;
+        p *= 2.0;
+        a *= 0.5;
+    }
+    return v;
+}
+
+fn curlNoise(p: vec2f) -> vec2f {
+    let e = 0.01;
+    let dx = fbm(p + vec2f(e, 0.0)) - fbm(p - vec2f(e, 0.0));
+    let dy = fbm(p + vec2f(0.0, e)) - fbm(p - vec2f(0.0, e));
+    return vec2f(dy, -dx) / e;
+}
+
+@vertex
+fn vsMain(@builtin(vertex_index) v: u32) -> @builtin(position) vec4f {
+    var pos = array<vec2f, 6>(
+        vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+        vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0)
+    );
+    return vec4f(pos[v], 0.0, 1.0);
+}
+
+@fragment
+fn fsMain(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+    let uv = frag.xy / u.resolution;
+    let aspect = u.resolution.x / u.resolution.y;
+
+    // 当前帧的新渲染颜色
+    let sceneCol = textureSample(tScene, sLinear, uv).rgb;
+
+    // 显式强转：在标量 u.time * 0.08 前加上 vec2f，符合 WGSL 的严格类型规范
+    let vel = curlNoise(uv * 3.5 + vec2f(u.time * 0.08)) * 0.0018;
+    let prevCol = textureSample(tPrev, sLinear, uv - vel).rgb;
+
+    // 92% 历史惯性 + 8% 实时注入
+    let advectedColor = mix(prevCol, sceneCol, 0.08);
+
+    return vec4f(advectedColor, 1.0);
+}
+`;
+
+            // --- 6. 后处理（Post-Process）管线代码 ---
+            const postShaderSource = `
+struct Uniforms {
+    resolution : vec2f,
+    mouse : vec2f,
+    time : f32,
+    pad : f32,
+};
+
+@group(0) @binding(0) var<uniform> u : Uniforms;
+@group(0) @binding(1) var tInput : texture_2d<f32>;
+@group(0) @binding(2) var sLinear : sampler;
+
+fn hash(p: vec2f) -> f32 {
+    return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453123);
+}
+
+@vertex
+fn vsMain(@builtin(vertex_index) v: u32) -> @builtin(position) vec4f {
+    var pos = array<vec2f, 6>(
+        vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+        vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0)
+    );
+    return vec4f(pos[v], 0.0, 1.0);
+}
+
+@fragment
+fn fsMain(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+    let uv = frag.xy / u.resolution;
+
+    // 镜头边缘径向色散采样
+    let toCenter = uv - vec2f(0.5);
+    let distFromCenter = length(toCenter);
+    let lensDispersion = toCenter * distFromCenter * 0.018;
+
+    let rScene = textureSample(tInput, sLinear, uv - lensDispersion).r;
+    let gScene = textureSample(tInput, sLinear, uv).g;
+    let bScene = textureSample(tInput, sLinear, uv + lensDispersion).b;
+    var finalColor = vec3f(rScene, gScene, bScene);
+
+    // 2. 模拟真实宽域大光晕 (True Bloom) + 变形镜头水平拉丝 (Anamorphic Glare)
+    var bloom = vec3f(0.0);
+    var glare = vec3f(0.0);
+    let scale = 0.0035;
+
+    for(var i: i32 = 0; i < 12; i = i + 1) {
+        let angle = f32(i) * 0.523598;
+        let dir = vec2f(cos(angle), sin(angle));
+        let sampleNear = textureSample(tInput, sLinear, uv + dir * scale).rgb;
+        let sampleFar  = textureSample(tInput, sLinear, uv + dir * scale * 4.5).rgb;
+
+        let bNear = max(0.0, max(sampleNear.r, max(sampleNear.g, sampleNear.b)) - 0.75);
+        let bFar  = max(0.0, max(sampleFar.r,  max(sampleFar.g,  sampleFar.b))  - 0.75);
+
+        bloom += sampleNear * bNear * 0.85;
+        bloom += sampleFar  * bFar  * 0.55;
+    }
+    bloom /= 12.0;
+
+    // 大跨度水平单向拉丝 (Anamorphic Glare Streaks)
+    for(var j: i32 = -6; j <= 6; j = j + 1) {
+        let offsetUv = uv + vec2f(f32(j) * 0.013, 0.0);
+        let sampleStreak = textureSample(tInput, sLinear, offsetUv).rgb;
+        let streakLuma = max(0.0, max(sampleStreak.r, max(sampleStreak.g, sampleStreak.b)) - 0.82);
+        glare += sampleStreak * streakLuma * 0.16;
+    }
+
+    finalColor += bloom * 1.6 + glare * 0.75;
+
+    // 3. 模拟物理镜头颗粒尘埃效果 (Lens Dirt)
+    let dirtNoise = hash(uv * 12.0);
+    let dirtPattern = smoothstep(0.992, 0.999, dirtNoise);
+    let luma = max(finalColor.r, max(finalColor.g, finalColor.b));
+    let lensDirt = vec3f(0.85, 0.75, 0.95) * dirtPattern * luma * 1.5;
+    finalColor += lensDirt;
+
+    // 4. 镜头暗角 (Vignette)
+    let vignette = smoothstep(1.3, 0.4, distFromCenter);
+    finalColor *= vignette;
+
+    // 5. 极微弱胶片噪点 (Film Grain)
+    let noiseSeed = uv + vec2f(u.time * 0.02);
+    let grain = (hash(noiseSeed) - 0.5) * 0.028;
+    finalColor += vec3f(grain);
+
+    // 6. ACES 与 Gamma
+    finalColor = aces(finalColor * 1.05);
+    finalColor = pow(finalColor, vec3f(1.0 / 2.2));
+
+    return vec4f(finalColor, 1.0);
+}
+
+fn aces(x: vec3f) -> vec3f {
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3f(0.0), vec3f(1.0));
+}
+`;
+
+            // --- 7. 重建与初始化 GPU 资源 (零 GC 核心，只在 Resize 触发重绑) ---
+            function initPipelinesAndBindGroups() {
+                const sceneModule = device.createShaderModule({
+                    code: sceneShaderSource,
+                });
+                const feedbackModule = device.createShaderModule({
+                    code: feedbackShaderSource,
+                });
+                const postModule = device.createShaderModule({
+                    code: postShaderSource,
+                });
+
+                scenePipeline = device.createRenderPipeline({
+                    layout: "auto",
+                    vertex: { module: sceneModule, entryPoint: "vsMain" },
+                    fragment: {
+                        module: sceneModule,
+                        entryPoint: "fsMain",
+                        targets: [{ format: "rgba16float" }],
+                    },
+                    primitive: { topology: "triangle-list" },
+                });
+
+                feedbackPipeline = device.createRenderPipeline({
+                    layout: "auto",
+                    vertex: { module: feedbackModule, entryPoint: "vsMain" },
+                    fragment: {
+                        module: feedbackModule,
+                        entryPoint: "fsMain",
+                        targets: [{ format: "rgba16float" }],
+                    },
+                    primitive: { topology: "triangle-list" },
+                });
+
+                postPipeline = device.createRenderPipeline({
+                    layout: "auto",
+                    vertex: { module: postModule, entryPoint: "vsMain" },
+                    fragment: {
+                        module: postModule,
+                        entryPoint: "fsMain",
+                        targets: [{ format }],
+                    },
+                    primitive: { topology: "triangle-list" },
+                });
+
+                sceneBindGroup = device.createBindGroup({
+                    layout: scenePipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: uniformBuffer } },
+                        { binding: 1, resource: galaxyTexture.createView() },
+                        { binding: 2, resource: linearSampler },
+                    ],
+                });
+
+                rebuildDynamicBindGroups();
+            }
+
+            function rebuildDynamicBindGroups() {
+                feedbackBindGroupA = device.createBindGroup({
+                    layout: feedbackPipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: uniformBuffer } },
+                        { binding: 1, resource: hdrTextureView },
+                        { binding: 2, resource: feedbackViewB },
+                        { binding: 3, resource: linearSampler },
+                    ],
+                });
+
+                feedbackBindGroupB = device.createBindGroup({
+                    layout: feedbackPipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: uniformBuffer } },
+                        { binding: 1, resource: hdrTextureView },
+                        { binding: 2, resource: feedbackViewA },
+                        { binding: 3, resource: linearSampler },
+                    ],
+                });
+
+                postBindGroupA = device.createBindGroup({
+                    layout: postPipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: uniformBuffer } },
+                        { binding: 1, resource: feedbackViewA },
+                        { binding: 2, resource: linearSampler },
+                    ],
+                });
+
+                postBindGroupB = device.createBindGroup({
+                    layout: postPipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: uniformBuffer } },
+                        { binding: 1, resource: feedbackViewB },
+                        { binding: 2, resource: linearSampler },
+                    ],
+                });
+            }
+
+            function updateHDRResources() {
+                if (hdrTexture) hdrTexture.destroy();
+                if (feedbackTexA) feedbackTexA.destroy();
+                if (feedbackTexB) feedbackTexB.destroy();
+
+                hdrTexture = device.createTexture({
+                    size: [canvas.width, canvas.height, 1],
+                    format: "rgba16float",
+                    usage:
+                        GPUTextureUsage.RENDER_ATTACHMENT |
+                        GPUTextureUsage.TEXTURE_BINDING,
+                });
+                hdrTextureView = hdrTexture.createView();
+
+                feedbackTexA = device.createTexture({
+                    size: [canvas.width, canvas.height, 1],
+                    format: "rgba16float",
+                    usage:
+                        GPUTextureUsage.RENDER_ATTACHMENT |
+                        GPUTextureUsage.TEXTURE_BINDING,
+                });
+                feedbackViewA = feedbackTexA.createView();
+
+                feedbackTexB = device.createTexture({
+                    size: [canvas.width, canvas.height, 1],
+                    format: "rgba16float",
+                    usage:
+                        GPUTextureUsage.RENDER_ATTACHMENT |
+                        GPUTextureUsage.TEXTURE_BINDING,
+                });
+                feedbackViewB = feedbackTexB.createView();
+
+                if (scenePipeline) {
+                    rebuildDynamicBindGroups();
+                }
+            }
+
+            function resize() {
+                const dpr = window.devicePixelRatio || 1;
+                canvas.width = window.innerWidth * dpr;
+                canvas.height = window.innerHeight * dpr;
+                context.configure({
+                    device,
+                    format,
+                    alphaMode: "premultiplied",
+                });
+                updateHDRResources();
+            }
+            resize();
+
+            // 首次编译生成所有管线
+            initPipelinesAndBindGroups();
+            window.addEventListener("resize", resize);
+
+            // --- 8. 交互控制与主帧循环 ---
+            let mouseX = 0.5;
+            let mouseY = 0.5;
+            let targetMouseX = 0.5;
+            let targetMouseY = 0.5;
+            let frameFlip = 0;
+
+            canvas.addEventListener("pointermove", (e) => {
+                targetMouseX = e.clientX / window.innerWidth;
+                targetMouseY = e.clientY / window.innerHeight;
+            });
+
+            const start = performance.now();
+
+            function frame() {
+                if (!hdrTextureView) {
+                    requestAnimationFrame(frame);
+                    return;
+                }
+
+                const time = (performance.now() - start) * 0.001;
+
+                mouseX += (targetMouseX - mouseX) * 0.08;
+                mouseY += (targetMouseY - mouseY) * 0.08;
+
+                device.queue.writeBuffer(
+                    uniformBuffer,
+                    0,
+                    new Float32Array([
+                        canvas.width,
+                        canvas.height,
+                        mouseX,
+                        mouseY,
+                        time,
+                        0.0,
+                    ]),
+                );
+
+                const encoder = device.createCommandEncoder();
+
+                // Pass 1: 渲染主 3D 场景 -> HDR RenderTarget
+                const scenePass = encoder.beginRenderPass({
+                    colorAttachments: [
+                        {
+                            view: hdrTextureView,
+                            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+                            loadOp: "clear",
+                            storeOp: "store",
+                        },
+                    ],
+                });
+                scenePass.setPipeline(scenePipeline);
+                scenePass.setBindGroup(0, sceneBindGroup);
+                scenePass.draw(6);
+                scenePass.end();
+
+                // 双通道 Ping-Pong 轮转绑定选择
+                let activeFeedbackPassView,
+                    activeFeedbackBindGroup,
+                    activePostBindGroup;
+                if (frameFlip === 0) {
+                    activeFeedbackPassView = feedbackViewA;
+                    activeFeedbackBindGroup = feedbackBindGroupA;
+                    activePostBindGroup = postBindGroupA;
+                    frameFlip = 1;
+                } else {
+                    activeFeedbackPassView = feedbackViewB;
+                    activeFeedbackBindGroup = feedbackBindGroupB;
+                    activePostBindGroup = postBindGroupB;
+                    frameFlip = 0;
+                }
+
+                // Pass 2: 时序反馈流体仿真
+                const feedbackPass = encoder.beginRenderPass({
+                    colorAttachments: [
+                        {
+                            view: activeFeedbackPassView,
+                            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+                            loadOp: "clear",
+                            storeOp: "store",
+                        },
+                    ],
+                });
+                feedbackPass.setPipeline(feedbackPipeline);
+                feedbackPass.setBindGroup(0, activeFeedbackBindGroup);
+                feedbackPass.draw(6);
+                feedbackPass.end();
+
+                // Pass 3: 后处理输出 -> 屏幕 Swapchain
+                const postPass = encoder.beginRenderPass({
+                    colorAttachments: [
+                        {
+                            view: context.getCurrentTexture().createView(),
+                            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+                            loadOp: "clear",
+                            storeOp: "store",
+                        },
+                    ],
+                });
+                postPass.setPipeline(postPipeline);
+                postPass.setBindGroup(0, activePostBindGroup);
+                postPass.draw(6);
+                postPass.end();
+
+                device.queue.submit([encoder.finish()]);
+                requestAnimationFrame(frame);
+            }
+
+            frame();
+
+            // --- 9. Web Audio API 背景声 ---
+            let audioCtx = null;
+            const promptEl = document.getElementById("audio-prompt");
+
+            window.addEventListener("click", () => {
+                if (audioCtx) return;
+
+                if (promptEl) promptEl.style.opacity = "0";
+                audioCtx = new (
+                    window.AudioContext || window.webkitAudioContext
+                )();
+
+                const masterGain = audioCtx.createGain();
+                masterGain.gain.setValueAtTime(0.35, audioCtx.currentTime);
+                masterGain.connect(audioCtx.destination);
+
+                const delayNode = audioCtx.createDelay(2.0);
+                delayNode.delayTime.setValueAtTime(0.8, audioCtx.currentTime);
+
+                const delayFeedback = audioCtx.createGain();
+                delayFeedback.gain.setValueAtTime(0.6, audioCtx.currentTime);
+
+                delayNode.connect(delayFeedback);
+                delayFeedback.connect(delayNode);
+                delayNode.connect(masterGain);
+
+                const droneOsc1 = audioCtx.createOscillator();
+                const droneOsc2 = audioCtx.createOscillator();
+                const droneGain = audioCtx.createGain();
+                const droneFilter = audioCtx.createBiquadFilter();
+
+                droneOsc1.type = "sine";
+                droneOsc1.frequency.setValueAtTime(55.0, audioCtx.currentTime);
+
+                droneOsc2.type = "triangle";
+                droneOsc2.frequency.setValueAtTime(55.2, audioCtx.currentTime);
+
+                droneFilter.type = "lowpass";
+                droneFilter.frequency.setValueAtTime(120, audioCtx.currentTime);
+
+                droneGain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+
+                droneOsc1.connect(droneFilter);
+                droneOsc2.connect(droneFilter);
+                droneFilter.connect(droneGain);
+                droneGain.connect(masterGain);
+
+                droneOsc1.start();
+                droneOsc2.start();
+
+                const filter = audioCtx.createBiquadFilter();
+                filter.type = "lowpass";
+                filter.frequency.setValueAtTime(450, audioCtx.currentTime);
+                filter.Q.setValueAtTime(3.0, audioCtx.currentTime);
+                filter.connect(masterGain);
+                filter.connect(delayNode);
+
+                const lfo = audioCtx.createOscillator();
+                const lfoGain = audioCtx.createGain();
+                lfo.frequency.setValueAtTime(0.04, audioCtx.currentTime);
+                lfoGain.gain.setValueAtTime(280, audioCtx.currentTime);
+
+                lfo.connect(lfoGain);
+                lfoGain.connect(filter.frequency);
+                lfo.start();
+
+                const chords = [
+                    [174.61, 220.0, 261.63, 329.63],
+                    [196.0, 246.94, 293.66, 392.0],
+                    [164.81, 196.0, 246.94, 293.66],
+                    [220.0, 261.63, 329.63, 392.0],
+                ];
+
+                let chordIndex = 0;
+
+                function playNextChord() {
+                    const activeChord = chords[chordIndex];
+                    const now = audioCtx.currentTime;
+
+                    activeChord.forEach((freq, idx) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+
+                        osc.type = "sine";
+                        osc.frequency.setValueAtTime(
+                            freq + (Math.random() - 0.5) * 0.8,
+                            now,
+                        );
+
+                        gain.gain.setValueAtTime(0.0, now);
+                        gain.gain.linearRampToValueAtTime(
+                            0.08,
+                            now + 3.0 + idx * 0.5,
+                        );
+                        gain.gain.setValueAtTime(0.08, now + 8.0);
+                        gain.gain.exponentialRampToValueAtTime(
+                            0.0001,
+                            now + 14.0,
+                        );
+
+                        osc.connect(gain);
+                        gain.connect(filter);
+
+                        osc.start(now);
+                        osc.stop(now + 14.0);
+                    });
+
+                    chordIndex = (chordIndex + 1) % chords.length;
+                    setTimeout(playNextChord, 10000);
+                }
+
+                playNextChord();
+            });
+        </script>
+    </body>
+</html>

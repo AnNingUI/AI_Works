@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>MD3 WebGPU Liquid OS</title>
+        <style>
+            :root {
+                font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            }
+            body,
+            html {
+                margin: 0;
+                padding: 0;
+                width: 100%;
+                height: 100%;
+                overflow: hidden;
+                background: #000;
+            }
+            canvas {
+                display: block;
+                width: 100%;
+                height: 100%;
+            }
+            #ui-layer {
+                display: none; /* 隐藏源 2D 画布 */
+            }
+
+            /* 错误提示层 */
+            #error-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: #1a1a1a;
+                color: #ffb4ab;
+                display: none;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                z-index: 999;
+                padding: 20px;
+                box-sizing: border-box;
+            }
+        </style>
+    </head>
+    <body>
+        <!-- 错误提示 -->
+        <div id="error-overlay">
+            <h2>WebGPU 启动失败</h2>
+            <p>
+                请确保使用 Chrome/Edge 113+，并通过 <b>localhost</b> 或
+                <b>HTTPS</b> 访问。
+            </p>
+            <p style="font-size: 0.8em; color: #999">
+                WebGPU 不支持直接 file:// 协议打开。
+            </p>
+        </div>
+
+        <!-- 离屏 UI 绘制层 (Canvas 2D) -->
+        <canvas id="ui-layer"></canvas>
+        <!-- 最终渲染层 (WebGPU) -->
+        <canvas id="gpu-layer"></canvas>
+
+        <script type="module">
+            /**
+             * ==========================================
+             * 1. MD3 Design System & Layout Engine
+             * ==========================================
+             */
+
+            const MD3 = {
+                sys: {
+                    color: {
+                        primary: "#D0BCFF",
+                        onPrimary: "#381E72",
+                        primaryContainer: "#4F378B",
+                        onPrimaryContainer: "#EADDFF",
+                        secondary: "#CCC2DC",
+                        onSecondary: "#332D41",
+                        tertiary: "#EFB8C8",
+                        surface: "#141218",
+                        surfaceVariant: "#49454F",
+                        onSurface: "#E6E1E5",
+                        onSurfaceVariant: "#CAC4D0",
+                        outline: "#938F99",
+                        inverseSurface: "#E6E1E5",
+                        inverseOnSurface: "#313033",
+                    },
+                    typescale: {
+                        displayLarge: "400 57px system-ui",
+                        headlineMedium: "400 28px system-ui",
+                        bodyLarge: "400 16px system-ui",
+                        labelLarge: "500 14px system-ui",
+                    },
+                    shape: {
+                        full: 999,
+                        xl: 28,
+                        lg: 16,
+                        md: 12,
+                    },
+                },
+            };
+
+            // 基础组件类
+            class Widget {
+                constructor(props = {}) {
+                    this.frame = { x: 0, y: 0, w: 0, h: 0 };
+                    this.props = {
+                        flex: props.flex || 0,
+                        padding: props.padding || 0,
+                        margin: props.margin || 0,
+                        direction: props.direction || "column",
+                        gap: props.gap || 0,
+                        bgColor: props.bgColor || null,
+                        radius: props.radius || 0,
+                        onClick: props.onClick || null,
+                        children: props.children || [],
+                    };
+                    // 绑定父子关系
+                    this.props.children.forEach((c) => (c.parent = this));
+                }
+
+                // 简易 Flex 布局算法
+                layout(ctx, x, y, w, h) {
+                    const p = this.props.padding;
+                    const m = this.props.margin;
+
+                    // 设置自身 Frame (减去 Margin)
+                    this.frame.x = x + m;
+                    this.frame.y = y + m;
+                    this.frame.w = Math.max(0, w - m * 2);
+                    this.frame.h = Math.max(0, h - m * 2);
+
+                    const children = this.props.children;
+                    if (children.length === 0) return;
+
+                    // 计算可用空间
+                    const isCol = this.props.direction === "column";
+                    const totalGap = this.props.gap * (children.length - 1);
+                    const contentSize =
+                        (isCol ? this.frame.h : this.frame.w) -
+                        p * 2 -
+                        totalGap;
+
+                    // 计算 Flex 份数
+                    let totalFlex = 0;
+                    let fixedSizeUsed = 0;
+                    children.forEach((c) => {
+                        if (c.props.flex > 0) totalFlex += c.props.flex;
+                        else fixedSizeUsed += 100; // 假设非 Flex 元素固定 100px (简化)
+                    });
+
+                    const availableForFlex = Math.max(
+                        0,
+                        contentSize - fixedSizeUsed,
+                    );
+                    const flexUnit =
+                        totalFlex > 0 ? availableForFlex / totalFlex : 0;
+
+                    // 递归布局子元素
+                    let cursor = p;
+                    children.forEach((c) => {
+                        let cx, cy, cw, ch;
+                        const childSize =
+                            c.props.flex > 0 ? c.props.flex * flexUnit : 100;
+
+                        if (isCol) {
+                            cx = this.frame.x + p;
+                            cy = this.frame.y + cursor;
+                            cw = this.frame.w - p * 2;
+                            ch = childSize;
+                            cursor += ch + this.props.gap;
+                        } else {
+                            cx = this.frame.x + cursor;
+                            cy = this.frame.y + p;
+                            cw = childSize;
+                            ch = this.frame.h - p * 2;
+                            cursor += cw + this.props.gap;
+                        }
+                        c.layout(ctx, cx, cy, cw, ch);
+                    });
+                }
+
+                draw(ctx) {
+                    // 绘制背景
+                    if (this.props.bgColor) {
+                        ctx.fillStyle = this.props.bgColor;
+                        ctx.beginPath();
+                        ctx.roundRect(
+                            this.frame.x,
+                            this.frame.y,
+                            this.frame.w,
+                            this.frame.h,
+                            this.props.radius,
+                        );
+                        ctx.fill();
+                    }
+                    // 绘制子元素
+                    this.props.children.forEach((c) => c.draw(ctx));
+                }
+
+                hitTest(mx, my) {
+                    // 简单的 AABB 检测
+                    if (
+                        mx >= this.frame.x &&
+                        mx <= this.frame.x + this.frame.w &&
+                        my >= this.frame.y &&
+                        my <= this.frame.y + this.frame.h
+                    ) {
+                        // 优先检测子元素 (倒序，Top-most)
+                        for (
+                            let i = this.props.children.length - 1;
+                            i >= 0;
+                            i--
+                        ) {
+                            const hit = this.props.children[i].hitTest(mx, my);
+                            if (hit) return hit;
+                        }
+                        return this.props.onClick ? this : null;
+                    }
+                    return null;
+                }
+            }
+
+            class Text extends Widget {
+                constructor(text, font, color, props = {}) {
+                    super(props);
+                    this.text = text;
+                    this.font = font;
+                    this.color = color;
+                }
+
+                draw(ctx) {
+                    super.draw(ctx);
+                    ctx.font = this.font;
+                    ctx.fillStyle = this.color;
+                    ctx.textBaseline = "middle";
+                    ctx.textAlign = "center";
+                    ctx.fillText(
+                        this.text,
+                        this.frame.x + this.frame.w / 2,
+                        this.frame.y + this.frame.h / 2,
+                    );
+                }
+            }
+
+            // === 构建 UI 界面 ===
+            const appRoot = new Widget({
+                bgColor: MD3.sys.color.surface,
+                padding: 24,
+                gap: 24,
+                children: [
+                    // 顶部栏
+                    new Widget({
+                        flex: 1,
+                        direction: "row",
+                        gap: 16,
+                        children: [
+                            new Widget({
+                                flex: 2,
+                                bgColor: MD3.sys.color.primaryContainer,
+                                radius: MD3.sys.shape.xl,
+                                children: [
+                                    new Text(
+                                        "Liquid OS",
+                                        MD3.sys.typescale.displayLarge,
+                                        MD3.sys.color.onPrimaryContainer,
+                                    ),
+                                ],
+                            }),
+                            new Widget({
+                                flex: 1,
+                                bgColor: MD3.sys.color.tertiary,
+                                radius: MD3.sys.shape.full,
+                                onClick: () => triggerEffect("wave"),
+                                children: [
+                                    new Text(
+                                        "Ripple",
+                                        MD3.sys.typescale.labelLarge,
+                                        "#333",
+                                    ),
+                                ],
+                            }),
+                        ],
+                    }),
+                    // 主内容区
+                    new Widget({
+                        flex: 4,
+                        direction: "row",
+                        gap: 24,
+                        children: [
+                            // 左侧卡片
+                            new Widget({
+                                flex: 1,
+                                bgColor: MD3.sys.color.surfaceVariant,
+                                radius: MD3.sys.shape.lg,
+                                padding: 20,
+                                children: [
+                                    new Text(
+                                        "Glass Blur",
+                                        MD3.sys.typescale.headlineMedium,
+                                        MD3.sys.color.onSurfaceVariant,
+                                    ),
+                                ],
+                                onClick: () => triggerEffect("blur"),
+                            }),
+                            // 右侧列表
+                            new Widget({
+                                flex: 1,
+                                direction: "column",
+                                gap: 12,
+                                children: [
+                                    new Widget({
+                                        flex: 1,
+                                        bgColor: MD3.sys.color.secondary,
+                                        radius: MD3.sys.shape.md,
+                                        children: [
+                                            new Text(
+                                                "Chromatic",
+                                                MD3.sys.typescale.bodyLarge,
+                                                MD3.sys.color.onSecondary,
+                                            ),
+                                        ],
+                                        onClick: () =>
+                                            triggerEffect("chromatic"),
+                                    }),
+                                    new Widget({
+                                        flex: 1,
+                                        bgColor: MD3.sys.color.outline,
+                                        radius: MD3.sys.shape.md,
+                                        children: [
+                                            new Text(
+                                                "Static Noise",
+                                                MD3.sys.typescale.bodyLarge,
+                                                "#FFF",
+                                            ),
+                                        ],
+                                    }),
+                                    new Widget({
+                                        flex: 1,
+                                        bgColor: MD3.sys.color.inverseSurface,
+                                        radius: MD3.sys.shape.md,
+                                        children: [
+                                            new Text(
+                                                "Invert",
+                                                MD3.sys.typescale.bodyLarge,
+                                                MD3.sys.color.inverseOnSurface,
+                                            ),
+                                        ],
+                                    }),
+                                ],
+                            }),
+                        ],
+                    }),
+                    // 底部
+                    new Text(
+                        "WebGPU Accelerated UI / Canvas 2D Source",
+                        MD3.sys.typescale.labelLarge,
+                        MD3.sys.color.outline,
+                        { flex: 0.3 },
+                    ),
+                ],
+            });
+
+            /**
+             * ==========================================
+             * 2. WebGPU Renderer
+             * ==========================================
+             */
+
+            // Shader 代码 (WGSL)
+            const SHADER_CODE = `
+struct Uniforms {
+    // 使用 vec4 确保内存 16-byte 对齐，避免 padding 问题
+    // info1: x=time, y=resX, z=resY, w=effectType
+    info1: vec4<f32>,
+    // info2: x=progress, y=mouseX, z=mouseY, w=unused
+    info2: vec4<f32>,
+};
+
+@group(0) @binding(0) var uiSampler: sampler;
+@group(0) @binding(1) var uiTexture: texture_2d<f32>;
+@group(0) @binding(2) var<uniform> u: Uniforms;
+
+struct VertexOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+// 生成全屏三角形，无需 Vertex Buffer
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
+    var positions = array<vec2<f32>, 3>(
+        vec2(-1.0, -3.0),
+        vec2(3.0, 1.0),
+        vec2(-1.0, 1.0)
+    );
+    var out: VertexOut;
+    out.pos = vec4(positions[idx], 0.0, 1.0);
+    out.uv = positions[idx] * vec2(0.5, -0.5) + vec2(0.5, 0.5);
+    return out;
+}
+
+fn hash(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+@fragment
+fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+    // 解包 Uniforms
+    let time = u.info1.x;
+    let effectType = u.info1.w; // 0:None, 1:Wave, 2:Blur, 3:Chromatic
+    let progress = u.info2.x;
+    let mouse = u.info2.yz;
+
+    var finalUV = uv;
+    var color = vec4<f32>(0.0);
+
+    // === 1. Liquid Wave (海波浪) ===
+    // 即使在静止状态也有轻微浮动
+    let baseWave = sin(uv.y * 10.0 + time) * 0.002;
+
+    // 点击触发的强波浪
+    var activeWave = 0.0;
+    if (effectType == 1.0) {
+        let dist = distance(uv, mouse);
+        activeWave = sin(dist * 30.0 - time * 10.0) * 0.05 * progress;
+    }
+
+    finalUV = finalUV + vec2(baseWave + activeWave, activeWave);
+
+    // === 2. Chromatic Aberration (色散) ===
+    // 在切换或点击时，RGB 分离
+    var aber = 0.0;
+    if (effectType == 3.0) {
+        aber = progress * 0.02;
+    } else if (effectType == 1.0) {
+        aber = activeWave * 0.5; // 波浪边缘产生色散
+    }
+
+    let r = textureSample(uiTexture, uiSampler, finalUV + vec2(aber, 0.0)).r;
+    let g = textureSample(uiTexture, uiSampler, finalUV).g;
+    let b = textureSample(uiTexture, uiSampler, finalUV - vec2(aber, 0.0)).b;
+
+    color = vec4(r, g, b, 1.0);
+
+    // === 3. Glass Blur (毛玻璃) ===
+    if (effectType == 2.0 && progress > 0.01) {
+        var blurSum = vec4(0.0);
+        let blurSize = 0.01 * progress;
+        // 简单的 9 tap 采样
+        for(var i = -1.0; i <= 1.0; i += 1.0) {
+            for(var j = -1.0; j <= 1.0; j += 1.0) {
+                blurSum += textureSample(uiTexture, uiSampler, finalUV + vec2(i, j) * blurSize);
+            }
+        }
+        color = blurSum / 9.0;
+        // 加亮模拟玻璃反光
+        color += vec4(0.1 * progress);
+    }
+
+    // === 4. Film Grain (噪点) ===
+    // 增加质感，防止色带
+    let noise = (hash(uv * time) - 0.5) * 0.08;
+    color += vec4(noise);
+
+    return color;
+}
+`;
+
+            // 全局状态
+            const state = {
+                mouseX: 0.5,
+                mouseY: 0.5,
+                effectType: 0,
+                transitionVal: 0.0,
+            };
+
+            // 触发特效
+            window.triggerEffect = (typeStr) => {
+                const map = { wave: 1, blur: 2, chromatic: 3 };
+                state.effectType = map[typeStr] || 0;
+                state.transitionVal = 1.0; // 重置动画进度
+            };
+
+            async function init() {
+                // A. 2D Canvas 设置
+                const uiCanvas = document.getElementById("ui-layer");
+                const uiCtx = uiCanvas.getContext("2d");
+                const gpuCanvas = document.getElementById("gpu-layer");
+
+                // B. WebGPU 初始化
+                if (!navigator.gpu) {
+                    document.getElementById("error-overlay").style.display =
+                        "flex";
+                    return;
+                }
+
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) {
+                    console.error("No WebGPU Adapter");
+                    return;
+                }
+
+                const device = await adapter.requestDevice();
+                const context = gpuCanvas.getContext("webgpu");
+                const presentationFormat =
+                    navigator.gpu.getPreferredCanvasFormat();
+
+                context.configure({
+                    device,
+                    format: presentationFormat,
+                    alphaMode: "premultiplied",
+                });
+
+                // C. 资源创建
+                const pipeline = device.createRenderPipeline({
+                    layout: "auto",
+                    vertex: {
+                        module: device.createShaderModule({
+                            code: SHADER_CODE,
+                        }),
+                        entryPoint: "vs_main",
+                    },
+                    fragment: {
+                        module: device.createShaderModule({
+                            code: SHADER_CODE,
+                        }),
+                        entryPoint: "fs_main",
+                        targets: [{ format: presentationFormat }],
+                    },
+                    primitive: { topology: "triangle-list" },
+                });
+
+                // Uniform Buffer: 2个 vec4 = 32 bytes (8 floats)
+                // 严格匹配 WGSL struct 对齐
+                const uniformBufferSize = 32;
+                const uniformBuffer = device.createBuffer({
+                    size: uniformBufferSize,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                });
+
+                const sampler = device.createSampler({
+                    magFilter: "linear",
+                    minFilter: "linear",
+                });
+
+                let texture; // 动态创建
+
+                // D. 事件监听
+                const updateSize = () => {
+                    const dpr = window.devicePixelRatio || 1;
+                    const w = window.innerWidth;
+                    const h = window.innerHeight;
+
+                    // 设置物理像素大小
+                    uiCanvas.width = w * dpr;
+                    uiCanvas.height = h * dpr;
+                    gpuCanvas.width = w * dpr;
+                    gpuCanvas.height = h * dpr;
+
+                    // 2D 上下文缩放
+                    uiCtx.resetTransform();
+                    uiCtx.scale(dpr, dpr);
+
+                    // 重新布局 UI
+                    appRoot.layout(uiCtx, 0, 0, w, h);
+
+                    // 重建 Texture (大小改变时必须重建)
+                    if (texture) texture.destroy();
+                    texture = device.createTexture({
+                        size: [uiCanvas.width, uiCanvas.height],
+                        format: "rgba8unorm",
+                        usage:
+                            GPUTextureUsage.TEXTURE_BINDING |
+                            GPUTextureUsage.COPY_DST |
+                            GPUTextureUsage.RENDER_ATTACHMENT,
+                    });
+                };
+
+                window.addEventListener("resize", updateSize);
+                updateSize();
+
+                // 交互
+                gpuCanvas.addEventListener("mousemove", (e) => {
+                    const r = gpuCanvas.getBoundingClientRect();
+                    state.mouseX = (e.clientX - r.left) / r.width;
+                    state.mouseY = (e.clientY - r.top) / r.height;
+                });
+
+                gpuCanvas.addEventListener("click", (e) => {
+                    const r = gpuCanvas.getBoundingClientRect();
+                    // 转换 WebGPU 坐标到 逻辑像素坐标 用于 hitTest
+                    const hit = appRoot.hitTest(
+                        e.clientX - r.left,
+                        e.clientY - r.top,
+                    );
+
+                    if (hit && hit.props.onClick) {
+                        hit.props.onClick();
+                    } else {
+                        // 点击空白默认波浪
+                        triggerEffect("wave");
+                    }
+                });
+
+                // E. 渲染循环
+                const render = (time) => {
+                    // 1. 绘制 UI (Canvas 2D)
+                    // 实际应用中可以只在脏矩形时绘制，这里每帧全绘以支持动态背景
+                    uiCtx.fillStyle = MD3.sys.color.surface;
+                    uiCtx.fillRect(0, 0, uiCanvas.width, uiCanvas.height);
+                    appRoot.draw(uiCtx);
+
+                    // 2. 更新 WebGPU Uniforms
+                    // 动画衰减
+                    state.transitionVal = state.transitionVal * 0.94;
+                    if (state.transitionVal < 0.001) state.transitionVal = 0;
+
+                    // 组装数据: 2个 vec4 (Float32Array 长度为 8)
+                    const uniformData = new Float32Array([
+                        time * 0.001, // info1.x: time
+                        gpuCanvas.width, // info1.y: resX
+                        gpuCanvas.height, // info1.z: resY
+                        state.effectType, // info1.w: effectType
+                        state.transitionVal, // info2.x: progress
+                        state.mouseX, // info2.y: mouseX
+                        state.mouseY, // info2.z: mouseY
+                        0.0, // info2.w: padding
+                    ]);
+
+                    device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+
+                    // 3. 上传 Texture
+                    device.queue.copyExternalImageToTexture(
+                        { source: uiCanvas },
+                        { texture: texture },
+                        [uiCanvas.width, uiCanvas.height],
+                    );
+
+                    // 4. 提交 Render Pass
+                    const commandEncoder = device.createCommandEncoder();
+                    const renderPass = commandEncoder.beginRenderPass({
+                        colorAttachments: [
+                            {
+                                view: context.getCurrentTexture().createView(),
+                                clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                                loadOp: "clear",
+                                storeOp: "store",
+                            },
+                        ],
+                    });
+
+                    const bindGroup = device.createBindGroup({
+                        layout: pipeline.getBindGroupLayout(0),
+                        entries: [
+                            { binding: 0, resource: sampler },
+                            { binding: 1, resource: texture.createView() },
+                            { binding: 2, resource: { buffer: uniformBuffer } },
+                        ],
+                    });
+
+                    renderPass.setPipeline(pipeline);
+                    renderPass.setBindGroup(0, bindGroup);
+                    // 绘制 3 个顶点 (生成一个全屏三角形覆盖)
+                    renderPass.draw(3);
+                    renderPass.end();
+
+                    device.queue.submit([commandEncoder.finish()]);
+
+                    requestAnimationFrame(render);
+                };
+
+                requestAnimationFrame(render);
+            }
+
+            // 启动
+            init().catch((err) => {
+                console.error(err);
+                document.getElementById("error-overlay").style.display = "flex";
+            });
+        </script>
+    </body>
+</html>
