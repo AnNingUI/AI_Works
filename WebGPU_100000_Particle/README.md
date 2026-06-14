@@ -5,6 +5,7 @@
 ** 提示词已经丢失 **
 
 ## INDEX
+时间: 2025/11/25;
 使用AI模型: Gemini 3.1 Pro;
 使用AI平台: Google AI Studio;
 [源码](./index.html);

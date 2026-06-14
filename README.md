@@ -4,4 +4,5 @@
 
 ## INDEX
 
+- [ClaudeLogo_Animation](./ClaudeLogo_Animation/README.md)
 - [GalaxyEye_Shader](./GalaxyEye_Shader/README.md)
